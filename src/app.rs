@@ -111,7 +111,7 @@ impl App {
             screenshot: std::env::var_os("TELEPRINTER_SCREENSHOT").map(|p| (PathBuf::from(p), false)),
             control,
         };
-        let first = app.spawn(&cc.egui_ctx, None, dirs::home_dir());
+        let first = app.spawn(&cc.egui_ctx, None, dirs::home_dir(), HashMap::new());
         app.tree = Node::Leaf(first);
         app.active = first;
         // `TELEPRINTER_SPLITS=right,down` splits the active pane in turn at start
@@ -134,14 +134,15 @@ impl App {
     }
 
     /// Starts `command` (else `TELEPRINTER_COMMAND`, else the login shell) in
-    /// a new pane, not yet placed in the tree. It's told its pane and the
-    /// control socket, to ask for more.
-    fn spawn(&mut self, ctx: &egui::Context, command: Option<(String, Vec<String>)>, cwd: Option<PathBuf>) -> PaneId {
+    /// a new pane, not yet placed in the tree, with `env` added to the
+    /// window's environment. It's told its pane and the control socket, to
+    /// ask for more.
+    fn spawn(&mut self, ctx: &egui::Context, command: Option<(String, Vec<String>)>, cwd: Option<PathBuf>, mut env: HashMap<String, String>) -> PaneId {
         let id = self.next_id;
         self.next_id += 1;
         // A first guess at the size; the widget resizes it on its first frame.
         let size = WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 };
-        let mut env = HashMap::from([("TELEPRINTER_PANE".to_string(), id.to_string())]);
+        env.insert("TELEPRINTER_PANE".into(), id.to_string());
         if let Some(control) = &self.control {
             env.insert("TELEPRINTER_SOCKET".into(), control.path.display().to_string());
         }
@@ -155,7 +156,7 @@ impl App {
     /// takes the keyboard.
     fn split(&mut self, ctx: &egui::Context, dir: Dir) {
         let cwd = self.panes.get(&self.active).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
-        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir));
+        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir), HashMap::new());
         self.tree.split(self.active, dir, id);
         self.activate(id);
     }
@@ -165,7 +166,7 @@ impl App {
     fn new_at(&mut self, ctx: &egui::Context, at: egui::Pos2) {
         let target = self.pane_above(at);
         let cwd = self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
-        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir));
+        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir), HashMap::new());
         self.tree.insert(target, Side::Bottom, id);
         self.activate(id);
     }
@@ -182,14 +183,14 @@ impl App {
     fn answer(&mut self, ctx: &egui::Context, request: Request) -> serde_json::Value {
         let known = |app: &Self, id| app.tree.panes().contains(&id);
         match request {
-            Request::Split { pane, side, command, cwd, focus } => {
+            Request::Split { pane, side, command, cwd, focus, env } => {
                 let target = pane.unwrap_or(self.active);
                 if !known(self, target) {
                     return control::error(format!("no pane {target}"));
                 }
                 let cwd = cwd.or_else(|| self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd));
                 let command = command.split_first().map(|(program, args)| (program.clone(), args.to_vec()));
-                let id = self.spawn(ctx, command, cwd.or_else(dirs::home_dir));
+                let id = self.spawn(ctx, command, cwd.or_else(dirs::home_dir), env);
                 if let Some(Err(e)) = self.panes.get(&id).map(|p| &p.session) {
                     let e = e.clone();
                     self.panes.remove(&id);

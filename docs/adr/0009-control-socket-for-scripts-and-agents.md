@@ -47,6 +47,12 @@ those calls. It doesn't need a new model.
 - **A pane opened over the socket doesn't take the keyboard** unless `focus` is true. The user is
   usually typing to whoever opened it. Panes can run their own command, not only the login shell
   or the global `TELEPRINTER_COMMAND`, and close when it exits, as panes already do.
+- **A pane opened over the socket gets the caller's environment**, laid over the window's own
+  (less `PWD`, `OLDPWD`, `SHLVL` and `_`). Teleprinter started from the desktop has the session's
+  bare `PATH`; the caller's shell has read its rc files. A program run straight from the socket,
+  not through a shell, would otherwise miss everything those set (`~/.cargo/bin`, `EDITOR`, …),
+  and an nvim opened beside an agent behaved differently from one the user opens. kitty offers
+  this as `launch --copy-env`; here `msg split` always sends it, in the request's `env`.
 - **The CLI is the same binary**: `teleprinter msg split --right -- nvim …` (`--focus` to give it the keyboard). It uses
   `$TELEPRINTER_SOCKET` unless given `--socket`.
 - **There is no `send-text`** (typing into another pane) for now.
@@ -61,6 +67,8 @@ those calls. It doesn't need a new model.
   own shells out of reach. If we add it, it should be limited to panes the caller opened.
 - The protocol is an interface others will script against. Changing it later breaks them, so
   requests and replies should carry no more than they need.
+- Variables the caller unset but the window has still reach the new pane: the caller's
+  environment is added, it doesn't replace the window's.
 - A program that's been moved out of the pane tree (e.g. into tmux, or over ssh) inherits stale
   env vars, and the CLI should fail clearly when the socket or pane is gone.
 - Panes opened by programs and panes opened by hand look the same. There's no way yet to clean up

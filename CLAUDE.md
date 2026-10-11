@@ -42,7 +42,8 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_COLLAPS
   `egui::Window`s, title-bar drag handles (move, or swap after a hold), dividers, background menu. Its tests drive drags through
   egui with shell-less panes.
 - `src/control.rs`: the control socket and `teleprinter msg` (ADR-0009): split, list, close, focus
-  as JSON lines. Every pane gets `TELEPRINTER_SOCKET` and `TELEPRINTER_PANE`.
+  as JSON lines. Every pane gets `TELEPRINTER_SOCKET` and `TELEPRINTER_PANE`; a pane opened over the
+  socket also gets the caller's environment.
   `packaging/claude/teleprinter-panes/` is the Claude Code skill that uses it (nvim code tours);
   symlink it into `~/.claude/skills/`.
 - `src/config.rs`: `~/.config/teleprinter/config.toml` (skin, system title bar, font size).

@@ -4,6 +4,7 @@
 //! hands it to the app, which answers on its next frame; `teleprinter msg`
 //! is the client.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -26,7 +27,10 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 pub enum Request {
     /// A new pane beside `pane` (the caller's, else the active one), running
     /// `command` (else the login shell) in `cwd` (else `pane`'s directory).
-    /// It takes the keyboard only with `focus`.
+    /// It takes the keyboard only with `focus`. `env` is laid over the
+    /// window's own environment: the caller's, so the pane sees what it
+    /// sees (its `PATH` from shell rc files, say), not what the desktop
+    /// started Teleprinter with.
     Split {
         pane: Option<PaneId>,
         #[serde(default = "right")]
@@ -36,6 +40,8 @@ pub enum Request {
         cwd: Option<PathBuf>,
         #[serde(default)]
         focus: bool,
+        #[serde(default)]
+        env: HashMap<String, String>,
     },
     List,
     Close { pane: PaneId },
@@ -154,13 +160,16 @@ fn serve(stream: UnixStream, calls: &Sender<Call>, ctx: &egui::Context) {
 /// `teleprinter msg …`: sends one request to `$TELEPRINTER_SOCKET` (or
 /// `--socket`) and prints the reply. Returns the exit code.
 pub fn client(args: &[String]) -> i32 {
-    let (socket, request) = match parse(args) {
+    let (socket, mut request) = match parse(args) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("teleprinter msg: {message}\n\n{USAGE}");
             return 2;
         }
     };
+    if let Request::Split { env, .. } = &mut request {
+        *env = caller_env();
+    }
     let Some(socket) = socket.or_else(|| std::env::var_os("TELEPRINTER_SOCKET").map(PathBuf::from)) else {
         eprintln!("teleprinter msg: not in a Teleprinter pane ($TELEPRINTER_SOCKET isn't set); pass --socket");
         return 1;
@@ -195,6 +204,15 @@ usage: teleprinter msg [--socket PATH] <command>
   close [ID]   (default: this pane)
   focus ID";
 
+/// This process's environment, for a pane it opens, less what describes
+/// this shell rather than the new one. Variables that aren't UTF-8 are left out.
+fn caller_env() -> HashMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .filter(|(k, _)| !matches!(k.as_str(), "PWD" | "OLDPWD" | "SHLVL" | "_"))
+        .collect()
+}
+
 /// The caller's own pane, from `$TELEPRINTER_PANE`.
 fn this_pane() -> Option<PaneId> {
     std::env::var("TELEPRINTER_PANE").ok()?.parse().ok()
@@ -228,7 +246,7 @@ fn parse(args: &[String]) -> Result<(Option<PathBuf>, Request), String> {
                     other => return Err(format!("unknown option: {other}")),
                 }
             }
-            Request::Split { pane, side, command, cwd, focus }
+            Request::Split { pane, side, command, cwd, focus, env: HashMap::new() }
         }
         "list" => Request::List,
         "close" => Request::Close { pane: match args.next() {
@@ -262,7 +280,8 @@ mod tests {
                 side: Where::Down,
                 command: args("nvim +42 src/view.rs"),
                 cwd: None,
-                focus: true
+                focus: true,
+                env: HashMap::new()
             }
         );
     }
@@ -270,7 +289,9 @@ mod tests {
     #[test]
     fn wire_requests_fill_in_defaults() {
         let request: Request = serde_json::from_str(r#"{"cmd":"split"}"#).unwrap();
-        assert_eq!(request, Request::Split { pane: None, side: Where::Right, command: vec![], cwd: None, focus: false });
+        assert_eq!(request, Request::Split { pane: None, side: Where::Right, command: vec![], cwd: None, focus: false, env: HashMap::new() });
+        let request: Request = serde_json::from_str(r#"{"cmd":"split","env":{"PATH":"/opt/bin"}}"#).unwrap();
+        assert!(matches!(request, Request::Split { env, .. } if env["PATH"] == "/opt/bin"));
         assert_eq!(serde_json::from_str::<Request>(r#"{"cmd":"close","pane":2}"#).unwrap(), Request::Close { pane: 2 });
         assert!(serde_json::from_str::<Request>(r#"{"cmd":"close"}"#).is_err());
         assert!(serde_json::from_str::<Request>(r#"{"cmd":"split","sdie":"left"}"#).is_err());
