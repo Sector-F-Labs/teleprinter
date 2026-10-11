@@ -1,0 +1,17 @@
+[package]
+name = "teleprinter"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal emulator on egui and Patina, with alacritty_terminal doing the emulation"
+license = "BSD-3-Clause"
+publish = false
+
+[dependencies]
+alacritty_terminal = "0.26.0"
+dirs = "7.0.0"
+eframe = "0.35"
+egui = "0.35"
+image = { version = "0.25", default-features = false, features = ["png"] }
+patina-ui = "0.1.2"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
