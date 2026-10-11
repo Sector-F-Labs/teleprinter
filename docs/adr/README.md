@@ -47,6 +47,7 @@ mechanics of adding one.
 | [0003](0003-terminal-colours-come-from-the-skin.md) | Terminal colours come from the skin | Proposed |
 | [0004](0004-ctrl-shift-for-the-clipboard.md) | Ctrl+Shift+C/V for the clipboard; Ctrl+C stays an interrupt | Proposed |
 | [0005](0005-tiled-panes-as-pinned-windows.md) | Split into tiled panes, each a pinned window, swapped by dragging | Accepted |
+| [0006](0006-pane-titles-from-the-foreground-process.md) | Pane titles follow the foreground program, as tmux names windows | Accepted |
 
 ## Decision Relationship
 
@@ -56,6 +57,7 @@ flowchart TD
     A --> C[0003: colours from the skin]
     A --> D[0004: Ctrl+Shift clipboard]
     A --> E[0005: tiled panes as pinned windows]
+    E --> F[0006: titles from the foreground program]
 ```
 
 ## Revisit Triggers

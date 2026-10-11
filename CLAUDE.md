@@ -23,7 +23,8 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start. Check visual changes
 ## Layout
 
 - `src/session.rs`: the pty and alacritty_terminal's event loop; input, paste, resize, events
-  (title, clipboard store, colour queries, child exit). Each event requests a repaint.
+  (title, clipboard store, colour queries, child exit). Each event requests a repaint. Pane
+  titles: the pty's foreground process from /proc, re-read on output (ADR-0006).
 - `src/view.rs`: the widget: cell metrics, painting, key → bytes (`key_bytes`), mouse selection,
   wheel scrolling.
 - `src/palette.rs`: ANSI palette from the skin's `[app.teleprinter]`, else from the visuals

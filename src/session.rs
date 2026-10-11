@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -60,7 +61,24 @@ pub struct Session {
     pub exited: bool,
     /// The shell's process, for finding its working directory.
     pid: u32,
+    /// The pty, to ask which process group is in the foreground.
+    tty: Option<std::fs::File>,
+    /// What runs in the foreground, for the pane's title (as tmux names windows).
+    pub foreground: Option<Foreground>,
+    last_probe: Option<Instant>,
+    /// A second look due after output, for programs that start without writing.
+    probe_again: Option<Instant>,
 }
+
+/// The program in the foreground of a pane, and its directory.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Foreground {
+    pub name: String,
+    pub cwd: Option<std::path::PathBuf>,
+}
+
+/// How often output may trigger another look at the foreground process.
+const PROBE_INTERVAL: Duration = Duration::from_millis(200);
 
 impl Session {
     /// Starts `command` (the user's login shell when `None`) in `cwd`.
@@ -79,6 +97,7 @@ impl Session {
         };
         let pty = tty::new(&options, window_size, 0)?;
         let pid = pty.child().id();
+        let tty = pty.file().try_clone().ok();
         let (tx, events) = mpsc::channel();
         let listener = Listener { events: tx, ctx: ctx.clone() };
         let size = GridSize { columns: window_size.num_cols as usize, lines: window_size.num_lines as usize };
@@ -86,7 +105,7 @@ impl Session {
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         event_loop.spawn();
-        Ok(Self { term, sender, events, window_size, title: None, exited: false, pid })
+        Ok(Self { term, sender, events, window_size, title: None, exited: false, pid, tty, foreground: None, last_probe: None, probe_again: None })
     }
 
     /// The shell's current directory, where a split from this pane starts.
@@ -128,7 +147,9 @@ impl Session {
 
     /// Handles what the event loop sent since the last frame.
     pub fn pump(&mut self, ctx: &egui::Context, palette: &Palette) {
+        let mut output = false;
         while let Ok(event) = self.events.try_recv() {
+            output |= matches!(event, Event::Wakeup);
             match event {
                 Event::Title(title) => self.title = Some(title),
                 Event::ResetTitle => self.title = None,
@@ -146,11 +167,87 @@ impl Session {
                 Event::Bell | Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {}
             }
         }
+        // There's no event for a new foreground program, so output is the cue to look:
+        // a program nearly always writes (vim drawing, the prompt coming back). One that
+        // starts silently, like `sleep`, only follows the echo of Enter, so every burst of
+        // output also gets a second look once things settle.
+        let now = Instant::now();
+        let ready = self.last_probe.is_none_or(|at| now - at >= PROBE_INTERVAL);
+        if output {
+            self.probe_again = Some(now + PROBE_INTERVAL);
+        }
+        if (output && ready) || self.last_probe.is_none() || self.probe_again.is_some_and(|at| now >= at) {
+            self.last_probe = Some(now);
+            if !output {
+                self.probe_again = None;
+            }
+            self.foreground = self.probe();
+        }
+        if let Some(at) = self.probe_again {
+            ctx.request_repaint_after(at.saturating_duration_since(now));
+        }
+    }
+
+    /// The pty's foreground process group leader: its name and directory.
+    /// Read from /proc, so on Linux only; elsewhere `None`, and the title
+    /// falls back to the one the shell sets.
+    fn probe(&self) -> Option<Foreground> {
+        use std::os::fd::AsRawFd;
+        let fd = self.tty.as_ref()?.as_raw_fd();
+        // SAFETY: tcgetpgrp only reads the terminal's state; fd stays open for the call.
+        let group = unsafe { libc::tcgetpgrp(fd) };
+        if group <= 0 {
+            return None;
+        }
+        let name = std::fs::read_to_string(format!("/proc/{group}/comm")).ok()?.trim().to_string();
+        let cwd = std::fs::read_link(format!("/proc/{group}/cwd")).ok();
+        Some(Foreground { name, cwd })
+    }
+
+    /// The pane's title: the foreground program and where it is, as
+    /// `vim — ~/Src/teleprinter`; the shell's own title where that can't be
+    /// read; else "Shell".
+    pub fn label(&self) -> String {
+        match (&self.foreground, &self.title) {
+            (Some(fg), _) => title(fg, dirs::home_dir().as_deref()),
+            (None, Some(title)) => title.clone(),
+            (None, None) => "Shell".into(),
+        }
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.sender.send(Msg::Shutdown);
+    }
+}
+
+/// `name — dir`, with the home directory as `~`.
+pub fn title(fg: &Foreground, home: Option<&std::path::Path>) -> String {
+    let Some(cwd) = &fg.cwd else { return fg.name.clone() };
+    let dir = match home.and_then(|h| cwd.strip_prefix(h).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => cwd.display().to_string(),
+    };
+    format!("{} — {dir}", fg.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn fg(name: &str, cwd: Option<&str>) -> Foreground {
+        Foreground { name: name.into(), cwd: cwd.map(PathBuf::from) }
+    }
+
+    #[test]
+    fn titles_name_the_program_and_its_directory() {
+        let home = Some(Path::new("/home/me"));
+        assert_eq!(title(&fg("vim", Some("/home/me/src/x")), home), "vim — ~/src/x");
+        assert_eq!(title(&fg("zsh", Some("/home/me")), home), "zsh — ~");
+        assert_eq!(title(&fg("htop", Some("/etc")), home), "htop — /etc");
+        assert_eq!(title(&fg("ssh", None), home), "ssh");
     }
 }

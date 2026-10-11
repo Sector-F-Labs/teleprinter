@@ -156,7 +156,7 @@ impl App {
 
     fn title(&self, id: PaneId) -> String {
         match self.panes.get(&id).map(|p| &p.session) {
-            Some(Ok(session)) => session.title.clone().unwrap_or_else(|| "Shell".into()),
+            Some(Ok(session)) => session.label(),
             _ => "Shell".into(),
         }
     }

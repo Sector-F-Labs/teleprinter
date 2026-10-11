@@ -8,7 +8,8 @@ MesloLGS NF as the font.
 ![Teleprinter in the Notebook skin](docs/screenshot-notebook.png)
 
 Right-click a terminal to **Split Right** or **Split Down**. Panes tile the window, each in a
-window of its own with the shell's title. Drag a pane's title bar onto another to swap them, and
+window of its own titled with what's running in it and where, as tmux names its windows
+(`vim — ~/Src/teleprinter`, back to `zsh — ~/Src/teleprinter` when vim exits). Drag a pane's title bar onto another to swap them, and
 drag the gap between panes to resize.
 
 ![Three panes in the Dark Orange skin](docs/screenshot-split-dark-orange.png)
