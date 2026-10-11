@@ -48,6 +48,7 @@ mechanics of adding one.
 | [0004](0004-ctrl-shift-for-the-clipboard.md) | Ctrl+Shift+C/V for the clipboard; Ctrl+C stays an interrupt | Proposed |
 | [0005](0005-tiled-panes-as-pinned-windows.md) | Split into tiled panes, each a pinned window, swapped by dragging | Accepted |
 | [0006](0006-pane-titles-from-the-foreground-process.md) | Pane titles follow the foreground program, as tmux names windows | Accepted |
+| [0007](0007-collapse-panes-to-their-title-bars.md) | Collapse panes to their title bars, and give the space to their neighbours | Accepted |
 
 ## Decision Relationship
 
@@ -58,6 +59,7 @@ flowchart TD
     A --> D[0004: Ctrl+Shift clipboard]
     A --> E[0005: tiled panes as pinned windows]
     E --> F[0006: titles from the foreground program]
+    E --> G[0007: collapse panes to title bars]
 ```
 
 ## Revisit Triggers

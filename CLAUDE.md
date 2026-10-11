@@ -18,7 +18,7 @@ make screenshot    # docs/screenshot-*.png, running scripts/demo.sh in a throwaw
 Never touch the user's config: test runs set `XDG_CONFIG_HOME`/`XDG_DATA_HOME` to scratch dirs
 (as `make screenshot` does). `TELEPRINTER_COMMAND` runs a command through `sh -c` instead of the
 login shell, `TELEPRINTER_SKIN` picks a skin for one run, `TELEPRINTER_SCREENSHOT` saves a PNG
-and quits, `TELEPRINTER_SPLITS=right,down` splits at start. Check visual changes by reading the screenshot back.
+and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_COLLAPSED=2,4` folds those panes. Check visual changes by reading the screenshot back.
 
 ## Layout
 
@@ -47,5 +47,8 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start. Check visual changes
 - A widget made in a `Ui::new` must not share that Ui's id: with the same id the drag handles
   never got hovered or dragged (the Ui's own registration seems to replace the widget's).
 - The terminal widget must `allocate_rect` its space, or a pane's window shrinks to its title.
+- Collapse state is egui's (`CollapsingState` under `pane_id(id).with("collapsing")`); the layout
+  reads it (ADR-0007). egui sizes a collapsed title bar to its text, hence the spacer atoms.
+- Headless tests need `RawInput::time`, or every click lands in one multi-click burst.
 - Only ASCII cells are joined into text runs. Other glyphs (Nerd icons, CJK) are placed per cell
   so columns stay aligned.

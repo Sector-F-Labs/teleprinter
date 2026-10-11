@@ -10,9 +10,13 @@ MesloLGS NF as the font.
 Right-click a terminal to **Split Right** or **Split Down**. Panes tile the window, each in a
 window of its own titled with what's running in it and where, as tmux names its windows
 (`vim — ~/Src/teleprinter`, back to `zsh — ~/Src/teleprinter` when vim exits). Drag a pane's title bar onto another to swap them, and
-drag the gap between panes to resize.
+drag the gap between panes to resize. Collapse a pane with the arrow on its title bar (or
+double-click the title): in a stack, its neighbours take the space, so a column can hold many
+folded panes whose titles still show what's running.
 
 ![Three panes in the Dark Orange skin](docs/screenshot-split-dark-orange.png)
+
+![Two folded panes in a stack, Notebook skin](docs/screenshot-collapsed-notebook.png)
 
 Each skin colours the terminal too. Skins can set their own palette under `[app.teleprinter]`
 (`foreground`, `background`, `cursor`, `selection`, `black` … `bright_white`); anything left out
@@ -29,6 +33,7 @@ comes from the skin's own colours and a light or dark Tango palette.
 | Right-click → Split Right / Split Down | Split the pane (also in File) |
 | Drag a pane's title bar onto another | Swap the two panes |
 | Drag the gap between panes | Resize them |
+| Title bar arrow, or double-click the title | Collapse / expand the pane |
 | Mouse wheel | Scroll history (arrow keys in full-screen programs like `less`) |
 
 Ctrl+C, Ctrl+V and the rest go to the shell as usual.

@@ -54,6 +54,8 @@ pub struct App {
     next_id: PaneId,
     /// The pane whose title bar is being dragged onto another, to swap them.
     dragging: Option<PaneId>,
+    /// How tall a collapsed pane is: its title bar, measured from the panes shown.
+    title_height: f32,
     /// `TELEPRINTER_COMMAND`, run in every pane instead of the login shell.
     command: Option<(String, Vec<String>)>,
     requests: Requests,
@@ -83,6 +85,7 @@ impl App {
             active: 1,
             next_id: 1,
             dragging: None,
+            title_height: 34.0,
             command,
             requests: Requests { focus: true, ..Default::default() },
             screenshot: std::env::var_os("TELEPRINTER_SCREENSHOT").map(|p| (PathBuf::from(p), false)),
@@ -97,6 +100,12 @@ impl App {
                 "right" => app.split(&cc.egui_ctx, Dir::Right),
                 "down" => app.split(&cc.egui_ctx, Dir::Down),
                 _ => {}
+            }
+        }
+        // `TELEPRINTER_COLLAPSED=2,3` starts those panes collapsed (for screenshots).
+        for id in std::env::var("TELEPRINTER_COLLAPSED").unwrap_or_default().split(',') {
+            if let Ok(id) = id.trim().parse() {
+                set_collapsed(&cc.egui_ctx, id, true);
             }
         }
         app.skin().apply(&cc.egui_ctx);
@@ -250,18 +259,35 @@ impl App {
         let mut idle = Requests::default();
         let requests = if active { &mut self.requests } else { &mut idle };
         let pane = self.panes.get_mut(&id)?;
-        let mut content_top = rect.top();
+        // Not set when the window is collapsed and its contents aren't shown.
+        let mut content_top = None;
+        // egui sizes a collapsed window's title bar to its text, so the text is sized to
+        // fill the tile: its width less the arrow, the close button and the gaps around them.
+        let title: egui::Atoms<'static> = if collapsed(ctx, id) {
+            use egui::AtomExt;
+            let button = ctx.fonts_mut(|f| f.row_height(&egui::TextStyle::Heading.resolve(&style)));
+            let gaps = 4.0 * style.spacing.item_spacing.x;
+            let width = rect.width() - margin.sum().x - 2.0 * button - gaps;
+            // Centred like an open window's title: equal spacers either side of the text.
+            let font = egui::TextStyle::Heading.resolve(&style);
+            let text = ctx.fonts_mut(|f| f.layout_no_wrap(title.clone(), font, egui::Color32::WHITE).size().x);
+            let side = ((width - text) / 2.0 - style.spacing.item_spacing.x).max(0.0);
+            let spacer = |n: u8| egui::Atom::custom(Id::new(("title-spacer", id, n)), egui::vec2(side, 0.0));
+            egui::Atoms::new((spacer(0), title.atom_size(egui::vec2(text, button)), spacer(1)))
+        } else {
+            egui::Atoms::new(title)
+        };
         let shown = egui::Window::new(title)
-            .id(Id::new(("pane", id)))
+            .id(pane_id(id))
             .open(&mut open)
-            .collapsible(false)
+            .collapsible(true)
             .resizable(false)
             .movable(false)
             .constrain(false)
             .frame(frame)
             .fixed_rect(rect)
             .show(ctx, |ui| {
-                content_top = ui.max_rect().top();
+                content_top = Some(ui.max_rect().top());
                 let Ok(session) = &mut pane.session else {
                     let error = pane.session.as_ref().err().cloned().unwrap_or_default();
                     ui.colored_label(ui.visuals().error_fg_color, format!("Couldn't start the shell: {error}"));
@@ -310,10 +336,24 @@ impl App {
             self.active = id;
         }
         let window = shown.response.rect;
-        // The title bar, less the close button at its right end.
-        let bottom = content_top - margin.top;
+        // The title bar, less the collapse arrow at its left end and the close button at its
+        // right: a collapsed window is all title bar.
+        let bottom = match content_top {
+            Some(top) => {
+                self.title_height = top - margin.top - window.top() + margin.bottom;
+                top - margin.top
+            }
+            None => {
+                // Collapsed: the window is all title bar, so this is the height to give it.
+                self.title_height = window.height();
+                window.bottom()
+            }
+        };
         let height = bottom - window.top();
-        let strip = Rect::from_min_max(window.min, egui::pos2(window.right() - height - margin.right, bottom));
+        let strip = Rect::from_min_max(
+            egui::pos2(window.left() + height, window.top()),
+            egui::pos2(window.right() - height - margin.right, bottom),
+        );
         Some((strip, shown.response.layer_id))
     }
 
@@ -325,7 +365,9 @@ impl App {
         if self.panes.len() > 1 {
             response.clone().on_hover_cursor(egui::CursorIcon::Grab);
         }
-        if response.clicked() {
+        if response.double_clicked() {
+            set_collapsed(ctx, id, !collapsed(ctx, id));
+        } else if response.clicked() {
             self.activate(id);
         }
         if response.drag_started() && self.panes.len() > 1 {
@@ -391,7 +433,14 @@ impl App {
 
     /// Every pane in its tile, the dividers between them, and dragging to swap.
     fn show_tiles(&mut self, ctx: &egui::Context, desktop: Rect, palette: &Palette, actions: &mut Vec<Action>) {
-        let (tiles, dividers) = self.tree.layout(desktop, GAP);
+        let folded = |id| collapsed(ctx, id);
+        let (tiles, dividers) = self.tree.layout(desktop, GAP, &folded, self.title_height);
+        // The keyboard goes to a pane that's open.
+        if folded(self.active)
+            && let Some(open) = self.tree.panes().into_iter().find(|id| !folded(*id))
+        {
+            self.activate(open);
+        }
         for (id, rect) in &tiles {
             if let Some((strip, layer)) = self.show_pane(ctx, *id, *rect, palette, actions) {
                 self.drag_handle(ctx, *id, strip, layer);
@@ -517,6 +566,22 @@ impl eframe::App for App {
     }
 }
 
+/// Whether a pane's window is collapsed, as its arrow left it: egui keeps
+/// that state, and the layout follows it.
+fn collapsed(ctx: &egui::Context, id: PaneId) -> bool {
+    egui::collapsing_header::CollapsingState::load(ctx, pane_id(id).with("collapsing")).is_some_and(|s| !s.is_open())
+}
+
+fn set_collapsed(ctx: &egui::Context, id: PaneId, folded: bool) {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, pane_id(id).with("collapsing"), true);
+    state.set_open(!folded);
+    state.store(ctx);
+}
+
+fn pane_id(id: PaneId) -> Id {
+    Id::new(("pane", id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,9 +589,13 @@ mod tests {
 
     /// An app with panes 1 | 2 side by side and no shells behind them.
     fn two_panes() -> App {
+        panes_split(Dir::Right)
+    }
+
+    fn panes_split(dir: Dir) -> App {
         let (skins, _) = skin::load_all(skin::BUILT_IN, &[]);
         let mut tree = Node::Leaf(1);
-        tree.split(1, Dir::Right, 2);
+        tree.split(1, dir, 2);
         let pane = || Pane { session: Err("no shell in tests".into()), view: ViewState::default() };
         App {
             config: Config::default(),
@@ -538,6 +607,7 @@ mod tests {
             active: 1,
             next_id: 3,
             dragging: None,
+            title_height: 34.0,
             command: None,
             requests: Requests::default(),
             screenshot: None,
@@ -546,13 +616,73 @@ mod tests {
 
     const DESKTOP: Rect = Rect { min: Pos2::ZERO, max: Pos2 { x: 800.0, y: 500.0 } };
 
+    thread_local! {
+        static TIME: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+    }
+
+    /// One frame, 50 ms after the last.
     fn frame(ctx: &egui::Context, app: &mut App, events: Vec<Event>) {
-        let input = RawInput { screen_rect: Some(DESKTOP), events, ..Default::default() };
+        let time = TIME.with(|t| {
+            t.set(t.get() + 0.05);
+            t.get()
+        });
+        let input = RawInput { screen_rect: Some(DESKTOP), events, time: Some(time), ..Default::default() };
         let _ = ctx.run_ui(input, |ui| {
             let palette = Palette::new(&app.skins[0], ui.visuals()).0;
             let mut actions = Vec::new();
             app.show_tiles(ui.ctx(), DESKTOP, &palette, &mut actions);
         });
+    }
+
+    fn click(ctx: &egui::Context, app: &mut App, at: Pos2) {
+        frame(ctx, app, vec![Event::PointerMoved(at)]);
+        frame(ctx, app, vec![button(at, true)]);
+        frame(ctx, app, vec![button(at, false)]);
+    }
+
+    /// Where each pane's window is, as egui last placed it.
+    fn window_rect(ctx: &egui::Context, id: PaneId) -> Rect {
+        ctx.memory(|m| m.area_rect(pane_id(id))).unwrap()
+    }
+
+    #[test]
+    fn the_arrow_collapses_a_pane_and_its_neighbour_takes_the_space() {
+        let ctx = egui::Context::default();
+        let mut app = panes_split(Dir::Down);
+        frame(&ctx, &mut app, vec![]);
+        let before = window_rect(&ctx, 2);
+        // The collapse arrow sits at the left end of pane 1's title bar.
+        let title = window_rect(&ctx, 1);
+        click(&ctx, &mut app, pos2(title.left() + 18.0, title.top() + 17.0));
+        for _ in 0..3 {
+            frame(&ctx, &mut app, vec![]);
+        }
+        assert!(collapsed(&ctx, 1));
+        let (folded, open) = (window_rect(&ctx, 1), window_rect(&ctx, 2));
+        assert!(folded.height() < 60.0, "{folded:?}");
+        assert!(folded.bottom() <= open.top(), "no overlap: {folded:?} {open:?}");
+        // Test panes have no shell, so their windows are only as tall as their error
+        // message; the open one moving up to the folded one's title bar shows the space moved.
+        assert!(open.top() < before.top() - 150.0, "{open:?} was {before:?}");
+        assert_eq!(app.active, 2, "the keyboard moves to the open pane");
+    }
+
+    #[test]
+    fn double_clicking_a_title_bar_folds_and_unfolds() {
+        let ctx = egui::Context::default();
+        let mut app = panes_split(Dir::Down);
+        frame(&ctx, &mut app, vec![]);
+        let title = window_rect(&ctx, 1);
+        let at = pos2(title.center().x, title.top() + 15.0);
+        click(&ctx, &mut app, at);
+        click(&ctx, &mut app, at);
+        assert!(collapsed(&ctx, 1));
+        for _ in 0..20 {
+            frame(&ctx, &mut app, vec![]); // a second apart, so it's a new double-click
+        }
+        click(&ctx, &mut app, at);
+        click(&ctx, &mut app, at);
+        assert!(!collapsed(&ctx, 1));
     }
 
     fn button(pos: Pos2, pressed: bool) -> Event {
@@ -597,9 +727,9 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
-        let gap = app.tree.layout(DESKTOP, GAP).1[0].rect.center();
+        let gap = app.tree.layout(DESKTOP, GAP, &|_| false, 34.0).1[0].rect.center();
         drag(&ctx, &mut app, gap, gap + vec2(-200.0, 0.0));
-        let tiles = app.tree.layout(DESKTOP, GAP).0;
+        let tiles = app.tree.layout(DESKTOP, GAP, &|_| false, 34.0).0;
         assert!((tiles[0].1.width() - 200.0).abs() < 1.0, "{:?}", tiles[0].1);
     }
 }
