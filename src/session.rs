@@ -81,19 +81,22 @@ pub struct Foreground {
 const PROBE_INTERVAL: Duration = Duration::from_millis(200);
 
 impl Session {
-    /// Starts `command` (the user's login shell when `None`) in `cwd`.
+    /// Starts `command` (the user's login shell when `None`) in `cwd`, with
+    /// `env` added to its environment.
     pub fn spawn(
         ctx: &egui::Context,
         command: Option<(String, Vec<String>)>,
         cwd: Option<std::path::PathBuf>,
+        mut env: HashMap<String, String>,
         window_size: WindowSize,
     ) -> std::io::Result<Self> {
         tty::setup_env();
+        env.insert("TERM_PROGRAM".into(), "teleprinter".into());
         let options = tty::Options {
             shell: command.map(|(program, args)| tty::Shell::new(program, args)),
             working_directory: cwd,
             drain_on_exit: true,
-            env: HashMap::from([("TERM_PROGRAM".into(), "teleprinter".into())]),
+            env,
         };
         let pty = tty::new(&options, window_size, 0)?;
         let pid = pty.child().id();

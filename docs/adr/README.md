@@ -50,6 +50,7 @@ mechanics of adding one.
 | [0006](0006-pane-titles-from-the-foreground-process.md) | Pane titles follow the foreground program, as tmux names windows | Accepted |
 | [0007](0007-collapse-panes-to-their-title-bars.md) | Collapse panes to their title bars, and give the space to their neighbours | Accepted |
 | [0008](0008-drag-moves-panes-like-a-tiling-window-manager.md) | Dragging moves a pane like a tiling window manager; holding still swaps | Accepted |
+| [0009](0009-control-socket-for-scripts-and-agents.md) | A control socket lets programs in a pane open, move and close panes | Proposed |
 
 ## Decision Relationship
 
@@ -63,6 +64,7 @@ flowchart TD
     E --> G[0007: collapse panes to title bars]
     E -.superseded in part by.-> H[0008: drag moves like a tiling WM]
     G --> H
+    H --> I[0009: control socket for scripts and agents]
 ```
 
 ## Revisit Triggers
@@ -75,3 +77,5 @@ flowchart TD
   ([0002](0002-bundle-meslolgs-nf.md)).
 - A second app wants an ANSI palette (e.g. a log viewer): move the palette keys into Patina's shared
   skin format ([0003](0003-terminal-colours-come-from-the-skin.md)).
+- Agents want to type into panes they didn't open, or clean up what they opened: revisit
+  `send-text` and pane ownership ([0009](0009-control-socket-for-scripts-and-agents.md)).

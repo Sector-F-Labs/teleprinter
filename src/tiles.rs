@@ -96,6 +96,11 @@ impl Node {
         self.put(pane, if dir == Dir::Right { Side::Right } else { Side::Bottom }, new, false)
     }
 
+    /// Splits `pane` in two, putting `new` on `side` of it.
+    pub fn split_side(&mut self, pane: PaneId, side: Side, new: PaneId) -> bool {
+        self.put(pane, side, new, false)
+    }
+
     /// Puts `new` beside `target` on `side`. In a row or column already
     /// running that way it joins it and the children share the space evenly
     /// (`even`), or it takes half of `target`'s share; otherwise `target`

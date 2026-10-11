@@ -3,6 +3,7 @@
 
 mod app;
 mod config;
+mod control;
 mod fonts;
 mod palette;
 mod screenshot;
@@ -23,6 +24,10 @@ fn window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "msg") {
+        std::process::exit(control::client(&args[1..]));
+    }
     let config = config::Config::load();
     let custom_frame = !config.system_title_bar;
     let options = eframe::NativeOptions {

@@ -10,6 +10,7 @@ use patina::frame::{self, TitleBar};
 use patina::skin::{self, Skin};
 
 use crate::config::Config;
+use crate::control::{self, Request};
 use crate::palette::Palette;
 use crate::session::Session;
 use crate::tiles::{Dir, Divider, Node, PaneId, Side};
@@ -72,6 +73,8 @@ pub struct App {
     requests: Requests,
     /// `TELEPRINTER_SCREENSHOT`: where to save one, and whether it was asked for.
     screenshot: Option<(PathBuf, bool)>,
+    /// Where programs in the panes ask for panes (ADR-0009); `None` if it couldn't start.
+    control: Option<control::Server>,
 }
 
 impl App {
@@ -86,6 +89,9 @@ impl App {
         // `TELEPRINTER_COMMAND` runs that through `sh -c` instead of the login shell
         // (for screenshots and tests).
         let command = std::env::var("TELEPRINTER_COMMAND").ok().map(|c| ("/bin/sh".to_string(), vec!["-c".into(), c]));
+        let control = control::Server::start(&cc.egui_ctx)
+            .inspect_err(|e| eprintln!("teleprinter: no control socket: {e}"))
+            .ok();
         let mut app = Self {
             custom_frame: !config.system_title_bar,
             config,
@@ -103,8 +109,9 @@ impl App {
             command,
             requests: Requests { focus: true, ..Default::default() },
             screenshot: std::env::var_os("TELEPRINTER_SCREENSHOT").map(|p| (PathBuf::from(p), false)),
+            control,
         };
-        let first = app.spawn(&cc.egui_ctx, dirs::home_dir());
+        let first = app.spawn(&cc.egui_ctx, None, dirs::home_dir());
         app.tree = Node::Leaf(first);
         app.active = first;
         // `TELEPRINTER_SPLITS=right,down` splits the active pane in turn at start
@@ -126,13 +133,20 @@ impl App {
         app
     }
 
-    /// Starts a shell in a new pane, not yet placed in the tree.
-    fn spawn(&mut self, ctx: &egui::Context, cwd: Option<PathBuf>) -> PaneId {
+    /// Starts `command` (else `TELEPRINTER_COMMAND`, else the login shell) in
+    /// a new pane, not yet placed in the tree. It's told its pane and the
+    /// control socket, to ask for more.
+    fn spawn(&mut self, ctx: &egui::Context, command: Option<(String, Vec<String>)>, cwd: Option<PathBuf>) -> PaneId {
         let id = self.next_id;
         self.next_id += 1;
         // A first guess at the size; the widget resizes it on its first frame.
         let size = WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 };
-        let session = Session::spawn(ctx, self.command.clone(), cwd, size).map_err(|e| e.to_string());
+        let mut env = HashMap::from([("TELEPRINTER_PANE".to_string(), id.to_string())]);
+        if let Some(control) = &self.control {
+            env.insert("TELEPRINTER_SOCKET".into(), control.path.display().to_string());
+        }
+        let command = command.or_else(|| self.command.clone());
+        let session = Session::spawn(ctx, command, cwd, env, size).map_err(|e| e.to_string());
         self.panes.insert(id, Pane { session, view: ViewState::default() });
         id
     }
@@ -141,7 +155,7 @@ impl App {
     /// takes the keyboard.
     fn split(&mut self, ctx: &egui::Context, dir: Dir) {
         let cwd = self.panes.get(&self.active).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
-        let id = self.spawn(ctx, cwd.or_else(dirs::home_dir));
+        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir));
         self.tree.split(self.active, dir, id);
         self.activate(id);
     }
@@ -151,9 +165,73 @@ impl App {
     fn new_at(&mut self, ctx: &egui::Context, at: egui::Pos2) {
         let target = self.pane_above(at);
         let cwd = self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
-        let id = self.spawn(ctx, cwd.or_else(dirs::home_dir));
+        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir));
         self.tree.insert(target, Side::Bottom, id);
         self.activate(id);
+    }
+
+    /// Answers what programs sent to the control socket since the last frame.
+    fn answer_calls(&mut self, ctx: &egui::Context) {
+        let Some(control) = &self.control else { return };
+        let calls: Vec<_> = control.calls.try_iter().collect();
+        for (request, reply) in calls {
+            let _ = reply.send(self.answer(ctx, request));
+        }
+    }
+
+    fn answer(&mut self, ctx: &egui::Context, request: Request) -> serde_json::Value {
+        let known = |app: &Self, id| app.tree.panes().contains(&id);
+        match request {
+            Request::Split { pane, side, command, cwd, focus } => {
+                let target = pane.unwrap_or(self.active);
+                if !known(self, target) {
+                    return control::error(format!("no pane {target}"));
+                }
+                let cwd = cwd.or_else(|| self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd));
+                let command = command.split_first().map(|(program, args)| (program.clone(), args.to_vec()));
+                let id = self.spawn(ctx, command, cwd.or_else(dirs::home_dir));
+                if let Some(Err(e)) = self.panes.get(&id).map(|p| &p.session) {
+                    let e = e.clone();
+                    self.panes.remove(&id);
+                    return control::error(format!("couldn't start it: {e}"));
+                }
+                self.tree.split_side(target, side.into(), id);
+                if focus {
+                    self.activate(id);
+                }
+                control::ok(serde_json::json!({ "pane": id }))
+            }
+            Request::List => {
+                let panes: Vec<_> = self
+                    .tree
+                    .panes()
+                    .into_iter()
+                    .map(|id| {
+                        let session = self.panes.get(&id).and_then(|p| p.session.as_ref().ok());
+                        let rect = self.tiles.iter().find(|(t, _)| *t == id).map(|(_, r)| [r.left(), r.top(), r.width(), r.height()]);
+                        serde_json::json!({
+                            "pane": id,
+                            "title": self.title(id),
+                            "cwd": session.and_then(Session::cwd),
+                            "rect": rect,
+                            "collapsed": collapsed(ctx, id),
+                            "active": id == self.active,
+                        })
+                    })
+                    .collect();
+                control::ok(serde_json::json!({ "panes": panes }))
+            }
+            Request::Close { pane } if known(self, pane) => {
+                self.close(ctx, pane);
+                control::ok(serde_json::json!({}))
+            }
+            Request::Focus { pane } if known(self, pane) => {
+                set_collapsed(ctx, pane, false);
+                self.activate(pane);
+                control::ok(serde_json::json!({}))
+            }
+            Request::Close { pane } | Request::Focus { pane } => control::error(format!("no pane {pane}")),
+        }
     }
 
     /// The pane nearest above `at` in its column, else the active one.
@@ -548,6 +626,7 @@ impl eframe::App for App {
         let (palette, problems) = Palette::new(self.skin(), ui.visuals());
         let radius = if self.custom_frame { frame::corner_radius(&ctx, style.radius) } else { 0 };
 
+        self.answer_calls(&ctx);
         let mut exited = Vec::new();
         for (id, pane) in &mut self.panes {
             if let Ok(session) = &mut pane.session {
@@ -698,6 +777,7 @@ mod tests {
             command: None,
             requests: Requests::default(),
             screenshot: None,
+            control: None,
         }
     }
 
