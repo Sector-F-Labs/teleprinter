@@ -58,6 +58,8 @@ pub struct Session {
     /// Set by the shell with OSC 0/2; `None` until then.
     pub title: Option<String>,
     pub exited: bool,
+    /// The shell's process, for finding its working directory.
+    pid: u32,
 }
 
 impl Session {
@@ -76,6 +78,7 @@ impl Session {
             env: HashMap::from([("TERM_PROGRAM".into(), "teleprinter".into())]),
         };
         let pty = tty::new(&options, window_size, 0)?;
+        let pid = pty.child().id();
         let (tx, events) = mpsc::channel();
         let listener = Listener { events: tx, ctx: ctx.clone() };
         let size = GridSize { columns: window_size.num_cols as usize, lines: window_size.num_lines as usize };
@@ -83,7 +86,13 @@ impl Session {
         let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
         let sender = event_loop.channel();
         event_loop.spawn();
-        Ok(Self { term, sender, events, window_size, title: None, exited: false })
+        Ok(Self { term, sender, events, window_size, title: None, exited: false, pid })
+    }
+
+    /// The shell's current directory, where a split from this pane starts.
+    /// Read from /proc, so only on Linux; elsewhere `None` (home is used).
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        std::fs::read_link(format!("/proc/{}/cwd", self.pid)).ok()
     }
 
     /// Sends bytes to the shell, scrolling back down to it first.

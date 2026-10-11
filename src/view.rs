@@ -39,6 +39,7 @@ pub fn show(
     palette: &Palette,
     font_size: f32,
     requests: &mut Requests,
+    active: bool,
 ) -> egui::Response {
     let rect = ui.available_rect_before_wrap();
     let ppp = ui.ctx().pixels_per_point();
@@ -55,11 +56,12 @@ pub fn show(
         cell_height: (cell.y * ppp) as u16,
     });
 
-    let id = ui.id().with("terminal");
-    let response = ui.interact(rect, id, Sense::click_and_drag());
-    // Nothing else (a menu, a dialog) wants the keyboard: the shell has it. egui drops
-    // focus when the window loses it, so this also takes it back on returning.
-    let unclaimed = ui.memory(|m| m.focused().is_none());
+    // Claim the whole space, so a window around the terminal is as big as its tile.
+    let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    let id = response.id;
+    // Nothing else (a menu, a dialog) wants the keyboard: the active pane's shell has it.
+    // egui drops focus when the window loses it, so this also takes it back on returning.
+    let unclaimed = active && ui.memory(|m| m.focused().is_none());
     if response.clicked() || response.drag_started() || response.secondary_clicked() || requests.focus || unclaimed {
         response.request_focus();
         requests.focus = false;

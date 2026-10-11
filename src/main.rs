@@ -7,6 +7,7 @@ mod fonts;
 mod palette;
 mod screenshot;
 mod session;
+mod tiles;
 mod view;
 
 fn main() -> eframe::Result {

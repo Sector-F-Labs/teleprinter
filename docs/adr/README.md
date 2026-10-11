@@ -46,6 +46,7 @@ mechanics of adding one.
 | [0002](0002-bundle-meslolgs-nf.md) | Bundle MesloLGS NF as the terminal font | Accepted |
 | [0003](0003-terminal-colours-come-from-the-skin.md) | Terminal colours come from the skin | Proposed |
 | [0004](0004-ctrl-shift-for-the-clipboard.md) | Ctrl+Shift+C/V for the clipboard; Ctrl+C stays an interrupt | Proposed |
+| [0005](0005-tiled-panes-as-pinned-windows.md) | Split into tiled panes, each a pinned window, swapped by dragging | Accepted |
 
 ## Decision Relationship
 
@@ -54,12 +55,15 @@ flowchart TD
     A[0001: Patina + alacritty_terminal] --> B[0002: bundled MesloLGS NF]
     A --> C[0003: colours from the skin]
     A --> D[0004: Ctrl+Shift clipboard]
+    A --> E[0005: tiled panes as pinned windows]
 ```
 
 ## Revisit Triggers
 
 - egui's text layout can't keep up with fast output (`cat` of a large file stutters): consider
   caching rows or a glyph atlas of our own ([0001](0001-build-on-patina-with-alacritty-terminal.md)).
+- A second app wants tiles of pinned windows with drag-to-swap (UnAmp already tiles): move
+  `tiles.rs` and the pane handling into Patina ([0005](0005-tiled-panes-as-pinned-windows.md)).
 - A second Patina app wants a monospace font: move Meslo into Patina
   ([0002](0002-bundle-meslolgs-nf.md)).
 - A second app wants an ANSI palette (e.g. a log viewer): move the palette keys into Patina's shared

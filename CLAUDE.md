@@ -18,7 +18,7 @@ make screenshot    # docs/screenshot-*.png, running scripts/demo.sh in a throwaw
 Never touch the user's config: test runs set `XDG_CONFIG_HOME`/`XDG_DATA_HOME` to scratch dirs
 (as `make screenshot` does). `TELEPRINTER_COMMAND` runs a command through `sh -c` instead of the
 login shell, `TELEPRINTER_SKIN` picks a skin for one run, `TELEPRINTER_SCREENSHOT` saves a PNG
-and quits. Check visual changes by reading the screenshot back.
+and quits, `TELEPRINTER_SPLITS=right,down` splits at start. Check visual changes by reading the screenshot back.
 
 ## Layout
 
@@ -29,7 +29,10 @@ and quits. Check visual changes by reading the screenshot back.
 - `src/palette.rs`: ANSI palette from the skin's `[app.teleprinter]`, else from the visuals
   (ADR-0003).
 - `src/fonts.rs`: bundled MesloLGS NF (ADR-0002).
-- `src/app.rs`: window, Patina title bar and menus, skins, screenshot mode.
+- `src/tiles.rs`: the split tree (split, close, swap, ratios, layout), pure and unit-tested (ADR-0005).
+- `src/app.rs`: window, Patina title bar and menus, skins, screenshot mode; panes as pinned
+  `egui::Window`s, title-bar drag handles for swapping, dividers. Its tests drive drags through
+  egui with shell-less panes.
 - `src/config.rs`: `~/.config/teleprinter/config.toml` (skin, system title bar, font size).
 
 ## Gotchas
@@ -40,5 +43,8 @@ and quits. Check visual changes by reading the screenshot back.
   else holds it.
 - Alt+letter arrives as a Key and then a Text event; the Key sends ESC+letter and the Text is
   swallowed.
+- A widget made in a `Ui::new` must not share that Ui's id: with the same id the drag handles
+  never got hovered or dragged (the Ui's own registration seems to replace the widget's).
+- The terminal widget must `allocate_rect` its space, or a pane's window shrinks to its title.
 - Only ASCII cells are joined into text runs. Other glyphs (Nerd icons, CJK) are placed per cell
   so columns stay aligned.

@@ -7,6 +7,12 @@ MesloLGS NF as the font.
 
 ![Teleprinter in the Notebook skin](docs/screenshot-notebook.png)
 
+Right-click a terminal to **Split Right** or **Split Down**. Panes tile the window, each in a
+window of its own with the shell's title. Drag a pane's title bar onto another to swap them, and
+drag the gap between panes to resize.
+
+![Three panes in the Dark Orange skin](docs/screenshot-split-dark-orange.png)
+
 Each skin colours the terminal too. Skins can set their own palette under `[app.teleprinter]`
 (`foreground`, `background`, `cursor`, `selection`, `black` … `bright_white`); anything left out
 comes from the skin's own colours and a light or dark Tango palette.
@@ -19,6 +25,9 @@ comes from the skin's own colours and a light or dark Tango palette.
 | Ctrl+Shift+V | Paste |
 | Shift+Page Up / Down | Scroll back through history |
 | Mouse drag / double / triple click | Select text / a word / lines |
+| Right-click → Split Right / Split Down | Split the pane (also in File) |
+| Drag a pane's title bar onto another | Swap the two panes |
+| Drag the gap between panes | Resize them |
 | Mouse wheel | Scroll history (arrow keys in full-screen programs like `less`) |
 
 Ctrl+C, Ctrl+V and the rest go to the shell as usual.
@@ -34,7 +43,8 @@ make screenshot # regenerate docs/screenshot-*.png
 
 ## Status
 
-A first prototype. Not yet: mouse reporting to programs (vim `mouse=a`, tmux), input methods,
+A first prototype. Not yet: keyboard shortcuts for splitting and moving between panes, saving the
+layout, mouse reporting to programs (vim `mouse=a`, tmux), input methods,
 tabs, choosing a font, fonts for CJK and other scripts Meslo lacks.
 
 ## Licence

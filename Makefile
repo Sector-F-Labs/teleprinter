@@ -35,6 +35,7 @@ screenshot: ## Regenerate docs/screenshot-*.png in a throwaway config dir
 	@mkdir -p docs target/scratch-config target/scratch-data
 	$(SCRATCH_ENV) TELEPRINTER_COMMAND=$(CURDIR)/scripts/demo.sh TELEPRINTER_SCREENSHOT=docs/screenshot-notebook.png TELEPRINTER_SKIN=Notebook cargo run
 	$(SCRATCH_ENV) TELEPRINTER_COMMAND=$(CURDIR)/scripts/demo.sh TELEPRINTER_SCREENSHOT=docs/screenshot-dark-orange.png TELEPRINTER_SKIN="Dark Orange" cargo run
+	$(SCRATCH_ENV) TELEPRINTER_COMMAND=$(CURDIR)/scripts/demo.sh TELEPRINTER_SCREENSHOT=docs/screenshot-split-dark-orange.png TELEPRINTER_SKIN="Dark Orange" TELEPRINTER_SPLITS=right,down cargo run
 
 clean: ## Remove build output
 	cargo clean
