@@ -324,6 +324,8 @@ impl App {
                 let Ok(session) = &mut pane.session else {
                     let error = pane.session.as_ref().err().cloned().unwrap_or_default();
                     ui.colored_label(ui.visuals().error_fg_color, format!("Couldn't start the shell: {error}"));
+                    // Fill the tile anyway, as a terminal would.
+                    ui.allocate_space(ui.available_size());
                     return false;
                 };
                 let response = view::show(ui, session, &mut pane.view, palette, font_size, requests, active);
@@ -550,7 +552,8 @@ impl eframe::App for App {
         for (id, pane) in &mut self.panes {
             if let Ok(session) = &mut pane.session {
                 session.pump(&ctx, &palette);
-                if session.exited && self.screenshot.is_none() {
+                // Screenshots keep the last pane when its command ends, to have something to show.
+                if session.exited && (self.screenshot.is_none() || self.tree.panes().len() > 1) {
                     exited.push(*id);
                 }
             }
@@ -763,6 +766,53 @@ mod tests {
         assert_eq!(app.pane_above(pos2(700.0, 300.0)), 2);
         app.active = 2;
         assert_eq!(app.pane_above(pos2(100.0, 1.0)), 2, "nothing above: the active pane");
+    }
+
+    /// Runs frames until egui has settled the windows into their tiles.
+    fn settle(ctx: &egui::Context, app: &mut App) {
+        for _ in 0..5 {
+            frame(ctx, app, vec![]);
+        }
+    }
+
+    #[test]
+    fn closing_a_pane_lets_its_neighbour_fill_the_space() {
+        let ctx = egui::Context::default();
+        let mut app = two_panes();
+        settle(&ctx, &mut app);
+        assert!(window_rect(&ctx, 1).width() < 450.0, "{:?}", window_rect(&ctx, 1));
+        app.close(&ctx, 2);
+        settle(&ctx, &mut app);
+        assert!(window_rect(&ctx, 1).width() > 780.0, "{:?}", window_rect(&ctx, 1));
+    }
+
+    #[test]
+    fn moving_a_pane_away_lets_the_rest_fill_its_column() {
+        let ctx = egui::Context::default();
+        // 1 | (2 over 3); move 3 below 1: each column has two, evenly.
+        let mut app = two_panes();
+        app.tree.split(2, Dir::Down, 3);
+        app.panes.insert(3, Pane { session: Err("no shell in tests".into()), view: ViewState::default() });
+        settle(&ctx, &mut app);
+        assert!(window_rect(&ctx, 1).height() > 480.0);
+        app.tree.move_pane(3, 1, Side::Bottom);
+        settle(&ctx, &mut app);
+        assert!(window_rect(&ctx, 2).height() > 480.0, "2 fills the right: {:?}", window_rect(&ctx, 2));
+        assert!(window_rect(&ctx, 1).height() < 260.0, "1 shares the left: {:?}", window_rect(&ctx, 1));
+    }
+
+    #[test]
+    fn unfolding_a_pane_takes_its_space_back() {
+        let ctx = egui::Context::default();
+        let mut app = panes_split(Dir::Down);
+        settle(&ctx, &mut app);
+        set_collapsed(&ctx, 1, true);
+        settle(&ctx, &mut app);
+        assert!(window_rect(&ctx, 2).height() > 400.0, "{:?}", window_rect(&ctx, 2));
+        set_collapsed(&ctx, 1, false);
+        settle(&ctx, &mut app);
+        assert!(window_rect(&ctx, 2).height() < 260.0, "{:?}", window_rect(&ctx, 2));
+        assert!(window_rect(&ctx, 1).height() > 200.0, "{:?}", window_rect(&ctx, 1));
     }
 
     #[test]
