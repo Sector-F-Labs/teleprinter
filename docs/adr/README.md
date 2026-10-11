@@ -46,9 +46,10 @@ mechanics of adding one.
 | [0002](0002-bundle-meslolgs-nf.md) | Bundle MesloLGS NF as the terminal font | Accepted |
 | [0003](0003-terminal-colours-come-from-the-skin.md) | Terminal colours come from the skin | Proposed |
 | [0004](0004-ctrl-shift-for-the-clipboard.md) | Ctrl+Shift+C/V for the clipboard; Ctrl+C stays an interrupt | Proposed |
-| [0005](0005-tiled-panes-as-pinned-windows.md) | Split into tiled panes, each a pinned window, swapped by dragging | Accepted |
+| [0005](0005-tiled-panes-as-pinned-windows.md) | Split into tiled panes, each a pinned window, swapped by dragging | Accepted, partly superseded by [0008](0008-drag-moves-panes-like-a-tiling-window-manager.md) |
 | [0006](0006-pane-titles-from-the-foreground-process.md) | Pane titles follow the foreground program, as tmux names windows | Accepted |
 | [0007](0007-collapse-panes-to-their-title-bars.md) | Collapse panes to their title bars, and give the space to their neighbours | Accepted |
+| [0008](0008-drag-moves-panes-like-a-tiling-window-manager.md) | Dragging moves a pane like a tiling window manager; holding still swaps | Accepted |
 
 ## Decision Relationship
 
@@ -60,6 +61,8 @@ flowchart TD
     A --> E[0005: tiled panes as pinned windows]
     E --> F[0006: titles from the foreground program]
     E --> G[0007: collapse panes to title bars]
+    E -.superseded in part by.-> H[0008: drag moves like a tiling WM]
+    G --> H
 ```
 
 ## Revisit Triggers

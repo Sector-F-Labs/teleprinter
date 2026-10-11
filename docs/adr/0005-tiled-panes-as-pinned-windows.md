@@ -4,7 +4,8 @@ Date: 2026-10-11
 
 ## Status
 
-Accepted
+Accepted (dragging and the split tree superseded by
+[ADR-0008](0008-drag-moves-panes-like-a-tiling-window-manager.md))
 
 ## Context
 

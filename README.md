@@ -9,8 +9,9 @@ MesloLGS NF as the font.
 
 Right-click a terminal to **Split Right** or **Split Down**. Panes tile the window, each in a
 window of its own titled with what's running in it and where, as tmux names its windows
-(`vim — ~/Src/teleprinter`, back to `zsh — ~/Src/teleprinter` when vim exits). Drag a pane's title bar onto another to swap them, and
-drag the gap between panes to resize. Collapse a pane with the arrow on its title bar (or
+(`vim — ~/Src/teleprinter`, back to `zsh — ~/Src/teleprinter` when vim exits). Drag a pane's title bar onto another to move it to that side, as
+in a tiling window manager (hold still over a pane to swap the two instead), and drag the gap
+between panes to resize. Collapse a pane with the arrow on its title bar (or
 double-click the title): in a stack, its neighbours take the space, so a column can hold many
 folded panes whose titles still show what's running.
 
@@ -31,7 +32,9 @@ comes from the skin's own colours and a light or dark Tango palette.
 | Shift+Page Up / Down | Scroll back through history |
 | Mouse drag / double / triple click | Select text / a word / lines |
 | Right-click → Split Right / Split Down | Split the pane (also in File) |
-| Drag a pane's title bar onto another | Swap the two panes |
+| Drag a pane's title bar onto another | Move it to that side of the other pane |
+| …and hold still before letting go | Swap the two panes |
+| Right-click the background | New Terminal in that space |
 | Drag the gap between panes | Resize them |
 | Title bar arrow, or double-click the title | Collapse / expand the pane |
 | Mouse wheel | Scroll history (arrow keys in full-screen programs like `less`) |

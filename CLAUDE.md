@@ -30,9 +30,10 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_COLLAPS
 - `src/palette.rs`: ANSI palette from the skin's `[app.teleprinter]`, else from the visuals
   (ADR-0003).
 - `src/fonts.rs`: bundled MesloLGS NF (ADR-0002).
-- `src/tiles.rs`: the split tree (split, close, swap, ratios, layout), pure and unit-tested (ADR-0005).
+- `src/tiles.rs`: rows and columns of weighted children (split, insert, move, close, swap, dividers,
+  layout with folded panes), pure and unit-tested (ADR-0005, ADR-0008).
 - `src/app.rs`: window, Patina title bar and menus, skins, screenshot mode; panes as pinned
-  `egui::Window`s, title-bar drag handles for swapping, dividers. Its tests drive drags through
+  `egui::Window`s, title-bar drag handles (move, or swap after a hold), dividers, background menu. Its tests drive drags through
   egui with shell-less panes.
 - `src/config.rs`: `~/.config/teleprinter/config.toml` (skin, system title bar, font size).
 

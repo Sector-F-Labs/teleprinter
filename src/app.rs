@@ -12,7 +12,7 @@ use patina::skin::{self, Skin};
 use crate::config::Config;
 use crate::palette::Palette;
 use crate::session::Session;
-use crate::tiles::{Dir, Divider, Node, PaneId};
+use crate::tiles::{Dir, Divider, Node, PaneId, Side};
 use crate::view::{self, Requests, ViewState};
 
 /// The skin used until the user picks one: stock egui, following the desktop.
@@ -23,6 +23,9 @@ const MAX_FONT: f32 = 32.0;
 
 /// Space between tiles, and around them; dividers are dragged in it.
 const GAP: f32 = 4.0;
+
+/// Seconds a dragged pane must stay over another before dropping swaps them.
+const SWAP_AFTER: f64 = 0.6;
 
 /// What the menus ask for, handled after they're drawn.
 enum Action {
@@ -35,6 +38,8 @@ enum Action {
     /// Split the active pane.
     Split(Dir),
     Close(PaneId),
+    /// A new pane in the empty space at this point (the background's menu).
+    NewAt(egui::Pos2),
 }
 
 struct Pane {
@@ -54,8 +59,14 @@ pub struct App {
     next_id: PaneId,
     /// The pane whose title bar is being dragged onto another, to swap them.
     dragging: Option<PaneId>,
+    /// The pane the dragged one is over, and since when (egui time), for swapping.
+    hovering: Option<(PaneId, f64)>,
     /// How tall a collapsed pane is: its title bar, measured from the panes shown.
     title_height: f32,
+    /// Where each pane was last laid out, for placing a new one in empty space.
+    tiles: Vec<(PaneId, Rect)>,
+    /// Where the background was right-clicked, for its menu.
+    menu_at: Option<egui::Pos2>,
     /// `TELEPRINTER_COMMAND`, run in every pane instead of the login shell.
     command: Option<(String, Vec<String>)>,
     requests: Requests,
@@ -85,6 +96,9 @@ impl App {
             active: 1,
             next_id: 1,
             dragging: None,
+            hovering: None,
+            tiles: Vec::new(),
+            menu_at: None,
             title_height: 34.0,
             command,
             requests: Requests { focus: true, ..Default::default() },
@@ -130,6 +144,25 @@ impl App {
         let id = self.spawn(ctx, cwd.or_else(dirs::home_dir));
         self.tree.split(self.active, dir, id);
         self.activate(id);
+    }
+
+    /// A new pane in the empty space at `at`: below the pane above it in that
+    /// column (the space folded panes leave), or below the active pane.
+    fn new_at(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        let target = self.pane_above(at);
+        let cwd = self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
+        let id = self.spawn(ctx, cwd.or_else(dirs::home_dir));
+        self.tree.insert(target, Side::Bottom, id);
+        self.activate(id);
+    }
+
+    /// The pane nearest above `at` in its column, else the active one.
+    fn pane_above(&self, at: egui::Pos2) -> PaneId {
+        self.tiles
+            .iter()
+            .filter(|(_, r)| r.x_range().contains(at.x) && r.bottom() <= at.y)
+            .max_by(|a, b| a.1.bottom().total_cmp(&b.1.bottom()))
+            .map_or(self.active, |(id, _)| *id)
     }
 
     /// Closes a pane; closing the last one closes the window.
@@ -375,34 +408,64 @@ impl App {
         }
     }
 
-    /// While a tile is dragged: highlight the tile under the pointer, and
-    /// swap the two when the button is released over it.
-    fn drag_to_swap(&mut self, ctx: &egui::Context, tiles: &[(PaneId, Rect)]) {
+    /// While a pane is dragged: show where it would go, and put it there on
+    /// release. Over another pane it joins that pane's row or column on the
+    /// nearest side, as in a tiling window manager; held still over one for
+    /// `SWAP_AFTER`, it swaps places with it instead (ADR-0008).
+    fn drag_to_move(&mut self, ctx: &egui::Context, tiles: &[(PaneId, Rect)]) {
         let Some(from) = self.dragging else { return };
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-        let (pos, released) = ctx.input(|i| (i.pointer.interact_pos(), !i.pointer.primary_down()));
+        let (pos, released, now) = ctx.input(|i| (i.pointer.interact_pos(), !i.pointer.primary_down(), i.time));
         let target = pos.and_then(|p| tiles.iter().find(|(id, rect)| *id != from && rect.contains(p)));
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("swap-target")));
-        let selection = ctx.global_style().visuals.selection;
-        if let Some((_, rect)) = tiles.iter().find(|(id, _)| *id == from) {
-            painter.rect_stroke(*rect, 4.0, egui::Stroke::new(1.5, selection.bg_fill), egui::StrokeKind::Inside);
+        // How long the pointer has been over this target.
+        self.hovering = match (target, self.hovering) {
+            (Some((id, _)), Some((was, since))) if *id == was => Some((was, since)),
+            (Some((id, _)), _) => Some((*id, now)),
+            (None, _) => None,
+        };
+        let swap = self.hovering.is_some_and(|(_, since)| now - since >= SWAP_AFTER);
+        if let Some((_, since)) = self.hovering
+            && !swap
+        {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(SWAP_AFTER - (now - since)));
         }
-        if let Some((_, rect)) = target {
-            painter.rect_filled(*rect, 4.0, selection.bg_fill.gamma_multiply(0.35));
-            painter.rect_stroke(*rect, 4.0, egui::Stroke::new(2.0, selection.bg_fill), egui::StrokeKind::Inside);
+
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("drop-preview")));
+        let style = ctx.global_style();
+        let accent = style.visuals.selection.bg_fill;
+        if let Some((_, rect)) = tiles.iter().find(|(id, _)| *id == from) {
+            painter.rect_stroke(*rect, 4.0, egui::Stroke::new(1.5, accent), egui::StrokeKind::Inside);
+        }
+        let drop = target.zip(pos).map(|((id, rect), p)| (*id, *rect, Side::nearest(*rect, p)));
+        if let Some((_, rect, side)) = drop {
+            let (area, label) = if swap { (rect, "Swap") } else { (side.half(rect), "Move here") };
+            painter.rect_filled(area, 4.0, accent.gamma_multiply(0.35));
+            painter.rect_stroke(area, 4.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Inside);
+            painter.text(
+                area.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::TextStyle::Heading.resolve(&style),
+                style.visuals.strong_text_color(),
+            );
         }
         if released {
-            if let Some((to, _)) = target {
-                self.tree.swap(from, *to);
+            match drop {
+                Some((to, _, _)) if swap => self.tree.swap(from, to),
+                Some((to, _, side)) => {
+                    self.tree.move_pane(from, to, side);
+                }
+                None => {}
             }
             self.dragging = None;
+            self.hovering = None;
             self.activate(from);
         }
     }
 
     /// The handle in the gap between two sides of a split, for resizing it.
     fn divider(&mut self, ctx: &egui::Context, divider: &Divider) {
-        let id = Id::new(("divider", &divider.path));
+        let id = Id::new(("divider", &divider.path, divider.index));
         egui::Area::new(id).fixed_pos(divider.rect.min).constrain(false).show(ctx, |ui| {
             let (rect, response) = ui.allocate_exact_size(divider.rect.size(), egui::Sense::drag());
             let cursor = match divider.dir {
@@ -426,7 +489,7 @@ impl App {
                     Dir::Right => (pos.x - area.left()) / (area.width() - GAP),
                     Dir::Down => (pos.y - area.top()) / (area.height() - GAP),
                 };
-                self.tree.set_ratio(&divider.path, ratio);
+                self.tree.set_ratio(&divider.path, divider.index, ratio);
             }
         });
     }
@@ -435,6 +498,7 @@ impl App {
     fn show_tiles(&mut self, ctx: &egui::Context, desktop: Rect, palette: &Palette, actions: &mut Vec<Action>) {
         let folded = |id| collapsed(ctx, id);
         let (tiles, dividers) = self.tree.layout(desktop, GAP, &folded, self.title_height);
+        self.tiles = tiles.clone();
         // The keyboard goes to a pane that's open.
         if folded(self.active)
             && let Some(open) = self.tree.panes().into_iter().find(|id| !folded(*id))
@@ -449,7 +513,7 @@ impl App {
         for divider in &dividers {
             self.divider(ctx, divider);
         }
-        self.drag_to_swap(ctx, &tiles);
+        self.drag_to_move(ctx, &tiles);
     }
 
     fn take_screenshot(&mut self, ctx: &egui::Context) {
@@ -518,7 +582,23 @@ impl eframe::App for App {
                 se: radius,
                 ..Default::default()
             }))
-            .show(ui, |ui| ui.max_rect())
+            .show(ui, |ui| {
+                // The background between and below the tiles: right-click for a new pane.
+                let rect = ui.max_rect();
+                let response = ui.interact(rect, Id::new("desktop"), egui::Sense::click());
+                if response.secondary_clicked() {
+                    self.menu_at = response.interact_pointer_pos();
+                }
+                response.context_menu(|ui| {
+                    if ui.button("New Terminal").clicked() {
+                        if let Some(at) = self.menu_at {
+                            actions.push(Action::NewAt(at));
+                        }
+                        ui.close();
+                    }
+                });
+                rect
+            })
             .inner;
         self.show_tiles(&ctx, desktop, &palette, &mut actions);
 
@@ -547,6 +627,7 @@ impl eframe::App for App {
                 }
                 Action::Split(dir) => self.split(&ctx, dir),
                 Action::Close(id) => self.close(&ctx, id),
+                Action::NewAt(at) => self.new_at(&ctx, at),
             }
             self.requests.focus = true;
         }
@@ -607,6 +688,9 @@ mod tests {
             active: 1,
             next_id: 3,
             dragging: None,
+            hovering: None,
+            tiles: Vec::new(),
+            menu_at: None,
             title_height: 34.0,
             command: None,
             requests: Requests::default(),
@@ -668,6 +752,20 @@ mod tests {
     }
 
     #[test]
+    fn a_new_pane_goes_below_the_pane_above_the_click() {
+        let ctx = egui::Context::default();
+        // Panes 1 | 2 side by side, both folded: empty space below each title bar.
+        let mut app = two_panes();
+        set_collapsed(&ctx, 1, true);
+        set_collapsed(&ctx, 2, true);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.pane_above(pos2(100.0, 300.0)), 1);
+        assert_eq!(app.pane_above(pos2(700.0, 300.0)), 2);
+        app.active = 2;
+        assert_eq!(app.pane_above(pos2(100.0, 1.0)), 2, "nothing above: the active pane");
+    }
+
+    #[test]
     fn double_clicking_a_title_bar_folds_and_unfolds() {
         let ctx = egui::Context::default();
         let mut app = panes_split(Dir::Down);
@@ -691,26 +789,45 @@ mod tests {
 
     /// Drags from `from` to `to` in small steps, as a mouse would.
     fn drag(ctx: &egui::Context, app: &mut App, from: Pos2, to: Pos2) {
+        drag_and_hold(ctx, app, from, to, 0);
+    }
+
+    /// Drags, then holds still at `to` for `hold` frames (50 ms each) before letting go.
+    fn drag_and_hold(ctx: &egui::Context, app: &mut App, from: Pos2, to: Pos2, hold: usize) {
         frame(ctx, app, vec![Event::PointerMoved(from)]);
         frame(ctx, app, vec![button(from, true)]);
         for step in 1..=10 {
             let p = from + (to - from) * (step as f32 / 10.0);
             frame(ctx, app, vec![Event::PointerMoved(p)]);
         }
+        for _ in 0..hold {
+            frame(ctx, app, vec![]);
+        }
         frame(ctx, app, vec![button(to, false)]);
         frame(ctx, app, vec![]);
     }
 
     #[test]
-    fn dragging_a_title_bar_onto_another_tile_swaps_them() {
+    fn dropping_a_pane_on_another_moves_it_to_that_side() {
         let ctx = egui::Context::default();
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
-        // Pane 1's title bar, then the middle of pane 2.
-        drag(&ctx, &mut app, pos2(100.0, 15.0), pos2(600.0, 250.0));
-        assert_eq!(app.tree.panes(), [2, 1]);
+        // Pane 1's title bar, then near the bottom of pane 2.
+        drag(&ctx, &mut app, pos2(100.0, 15.0), pos2(600.0, 480.0));
+        assert_eq!(app.tree, Node::Split { dir: Dir::Down, children: vec![(Node::Leaf(2), 1.0), (Node::Leaf(1), 1.0)] });
         assert_eq!(app.dragging, None);
         assert_eq!(app.active, 1, "the dragged pane stays active");
+    }
+
+    #[test]
+    fn holding_still_over_a_pane_swaps_instead() {
+        let ctx = egui::Context::default();
+        let mut app = two_panes();
+        frame(&ctx, &mut app, vec![]);
+        drag_and_hold(&ctx, &mut app, pos2(100.0, 15.0), pos2(600.0, 480.0), 15);
+        assert_eq!(app.tree.panes(), [2, 1]);
+        let Node::Split { dir, .. } = &app.tree else { panic!() };
+        assert_eq!(*dir, Dir::Right, "same shape, places traded");
     }
 
     #[test]
