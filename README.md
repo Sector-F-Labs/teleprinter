@@ -1,4 +1,4 @@
-# Teleprinter
+# <img src="packaging/linux/teleprinter.svg" width="48" alt=""> Teleprinter
 
 A terminal emulator in the [Patina](https://github.com/Sector-F-Labs/patina) family: Patina's
 window frame and skins, following the desktop's light/dark setting, with
@@ -48,6 +48,9 @@ make            # list the targets
 make run        # run it
 make check      # tests and clippy
 make screenshot # regenerate docs/screenshot-*.png
+make install    # per user, into ~/.local (PREFIX=… to change), with launcher and icon
+make uninstall  # remove it again
+make icons      # re-render assets/teleprinter-icon-128.png from packaging/linux/teleprinter.svg
 ```
 
 ## Status

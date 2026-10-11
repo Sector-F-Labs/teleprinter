@@ -1,4 +1,9 @@
 APP_NAME := teleprinter
+APP_ID := com.sectorflabs.Teleprinter
+PREFIX ?= $(HOME)/.local
+BINDIR := $(PREFIX)/bin
+APPSDIR := $(PREFIX)/share/applications
+ICONDIR := $(PREFIX)/share/icons/hicolor
 VERSION := $(shell awk -F\" '/^version = / { print $$2; exit }' Cargo.toml)
 
 # A throwaway config and data dir, so screenshots and test runs never touch
@@ -7,7 +12,7 @@ SCRATCH_ENV := XDG_CONFIG_HOME=$(CURDIR)/target/scratch-config XDG_DATA_HOME=$(C
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run dev build test check screenshot clean
+.PHONY: help run dev build test check screenshot icons install uninstall clean
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -37,6 +42,29 @@ screenshot: ## Regenerate docs/screenshot-*.png in a throwaway config dir
 	$(SCRATCH_ENV) TELEPRINTER_COMMAND=$(CURDIR)/scripts/demo.sh TELEPRINTER_SCREENSHOT=docs/screenshot-dark-orange.png TELEPRINTER_SKIN="Dark Orange" cargo run
 	$(SCRATCH_ENV) TELEPRINTER_COMMAND=$(CURDIR)/scripts/demo.sh TELEPRINTER_SCREENSHOT=docs/screenshot-split-dark-orange.png TELEPRINTER_SKIN="Dark Orange" TELEPRINTER_SPLITS=right,down cargo run
 	$(SCRATCH_ENV) TELEPRINTER_COMMAND=$(CURDIR)/scripts/demo.sh TELEPRINTER_SCREENSHOT=docs/screenshot-collapsed-notebook.png TELEPRINTER_SKIN=Notebook TELEPRINTER_SPLITS=right,down,down TELEPRINTER_COLLAPSED=2,4 cargo run
+
+icons: ## Render assets/teleprinter-icon-128.png from packaging/linux/teleprinter.svg
+	cargo run -q --example render_icon -- 128 assets/teleprinter-icon-128.png
+
+# For the current user; no sudo. The launcher's Exec gets the absolute path,
+# so it works even if $(BINDIR) isn't on the GNOME session's PATH. On
+# Wayland the window icon comes from this launcher, matched by app id.
+install: build ## Install Teleprinter and its launcher for the current user (PREFIX=~/.local)
+	install -Dm755 target/release/teleprinter $(BINDIR)/teleprinter
+	install -Dm644 packaging/linux/teleprinter.svg $(ICONDIR)/scalable/apps/$(APP_ID).svg
+	install -Dm644 assets/teleprinter-icon-128.png $(ICONDIR)/128x128/apps/$(APP_ID).png
+	install -d $(APPSDIR)
+	sed 's|^Exec=teleprinter|Exec=$(BINDIR)/teleprinter|' packaging/linux/$(APP_ID).desktop > $(APPSDIR)/$(APP_ID).desktop
+	-update-desktop-database -q $(APPSDIR)
+	@# GTK trusts an icon cache over the folder, so refresh one if it exists.
+	-@test ! -f $(ICONDIR)/icon-theme.cache || gtk-update-icon-cache -q -t -f $(ICONDIR)
+	@echo "Installed $(BINDIR)/teleprinter and the $(APP_ID) launcher"
+
+uninstall: ## Remove what make install put in place
+	rm -f $(BINDIR)/teleprinter $(APPSDIR)/$(APP_ID).desktop
+	rm -f $(ICONDIR)/scalable/apps/$(APP_ID).svg $(ICONDIR)/128x128/apps/$(APP_ID).png
+	-update-desktop-database -q $(APPSDIR)
+	-@test ! -f $(ICONDIR)/icon-theme.cache || gtk-update-icon-cache -q -t -f $(ICONDIR)
 
 clean: ## Remove build output
 	cargo clean

@@ -13,7 +13,13 @@ make test          # unit tests (key mapping, palette, cell hit-testing)
 make check         # tests + clippy -D warnings
 make run           # run it (your login shell)
 make screenshot    # docs/screenshot-*.png, running scripts/demo.sh in a throwaway config dir
+make icons         # assets/teleprinter-icon-128.png from packaging/linux/teleprinter.svg (via resvg)
+make install       # per-user install to ~/.local; test with PREFIX=<scratch dir>
 ```
+
+On Wayland, `with_icon` does nothing: GNOME takes the window icon from the installed
+`com.sectorflabs.Teleprinter.desktop`, matched by app id, so no icon under `cargo run` just means
+the launcher isn't installed.
 
 Never touch the user's config: test runs set `XDG_CONFIG_HOME`/`XDG_DATA_HOME` to scratch dirs
 (as `make screenshot` does). `TELEPRINTER_COMMAND` runs a command through `sh -c` instead of the

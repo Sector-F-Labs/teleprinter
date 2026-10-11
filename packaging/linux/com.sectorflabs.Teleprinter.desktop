@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Teleprinter
+GenericName=Terminal
+Comment=A tiling terminal in the Patina family
+Exec=teleprinter
+Icon=com.sectorflabs.Teleprinter
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;command;prompt;tiling;
+StartupNotify=true
+StartupWMClass=com.sectorflabs.Teleprinter

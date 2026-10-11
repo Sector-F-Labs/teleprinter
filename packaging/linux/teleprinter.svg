@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- A Teletype Model 33-style teleprinter: a warm grey-beige body with a
+       black platen and a sloped keyboard of round keys, and a sheet of paper
+       feeding up out of it, printed with lines of output and a prompt with a
+       cursor on the last line. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9d2c3"/>
+      <stop offset="1" stop-color="#b3ab9b"/>
+    </linearGradient>
+    <linearGradient id="deck" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c7bfae"/>
+      <stop offset="1" stop-color="#a39b8a"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffdf6"/>
+      <stop offset="1" stop-color="#ece6d6"/>
+    </linearGradient>
+    <linearGradient id="platen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3a3e"/>
+      <stop offset="0.45" stop-color="#6a6a70"/>
+      <stop offset="1" stop-color="#1e1e21"/>
+    </linearGradient>
+    <radialGradient id="key" cx="0.4" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#5d5d63"/>
+      <stop offset="1" stop-color="#2a2a2e"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.5"/></filter>
+  </defs>
+
+  <!-- shadow under the machine -->
+  <ellipse cx="64" cy="117" rx="50" ry="6" fill="#000" opacity="0.3" filter="url(#shadow)"/>
+
+  <!-- the paper, feeding up out of the platen with a slight curl at the top -->
+  <path d="M30 66 L30 14 Q30 7 37 8 L92 10 Q98 10.5 98 17 L98 66 Z" fill="url(#paper)" stroke="#cfc6b1" stroke-width="0.8"/>
+  <path d="M37 8 Q31 8 30 14 L30 16 Q32 11 38 11.2 L92 13 Q97 13.3 98 17 Q98 10.5 92 10 Z" fill="#000" opacity="0.06"/>
+  <!-- printed output -->
+  <g fill="#4a4a50">
+    <rect x="36" y="20" width="38" height="3" rx="1"/>
+    <rect x="36" y="27" width="50" height="3" rx="1"/>
+    <rect x="36" y="34" width="28" height="3" rx="1"/>
+    <rect x="68" y="34" width="16" height="3" rx="1"/>
+    <rect x="36" y="41" width="44" height="3" rx="1"/>
+  </g>
+  <!-- the prompt: a chevron and a cursor block, in Patina orange -->
+  <path d="M36 48.5 L41 51.5 L36 54.5" fill="none" stroke="#e95420" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="45" y="48.5" width="5" height="6.5" rx="0.8" fill="#e95420"/>
+
+  <!-- the body -->
+  <path d="M16 70 Q16 62 24 62 L104 62 Q112 62 112 70 L112 84 L16 84 Z" fill="url(#body)"/>
+  <!-- the platen the paper comes out of, with knobs at its ends -->
+  <rect x="24" y="60" width="80" height="9" rx="4.5" fill="url(#platen)"/>
+  <circle cx="22" cy="64.5" r="5" fill="#2a2a2e"/>
+  <circle cx="106" cy="64.5" r="5" fill="#2a2a2e"/>
+  <circle cx="21" cy="63.5" r="1.8" fill="#77777d"/>
+  <circle cx="105" cy="63.5" r="1.8" fill="#77777d"/>
+  <!-- a seam below the platen -->
+  <rect x="18" y="76" width="92" height="1.2" fill="#000" opacity="0.12"/>
+
+  <!-- the sloped keyboard deck -->
+  <path d="M16 84 L112 84 L118 108 Q119 113 114 113 L14 113 Q9 113 10 108 Z" fill="url(#deck)"/>
+  <path d="M16 84 L112 84 L112.6 86.4 L15.4 86.4 Z" fill="#fff" opacity="0.25"/>
+  <!-- three rows of round keys, and a space bar -->
+  <g fill="url(#key)">
+    <circle cx="27" cy="91" r="3.2"/><circle cx="37" cy="91" r="3.2"/><circle cx="47" cy="91" r="3.2"/>
+    <circle cx="57" cy="91" r="3.2"/><circle cx="67" cy="91" r="3.2"/><circle cx="77" cy="91" r="3.2"/>
+    <circle cx="87" cy="91" r="3.2"/><circle cx="97" cy="91" r="3.2"/>
+    <circle cx="25" cy="99" r="3.4"/><circle cx="35.5" cy="99" r="3.4"/><circle cx="46" cy="99" r="3.4"/>
+    <circle cx="56.5" cy="99" r="3.4"/><circle cx="67" cy="99" r="3.4"/><circle cx="77.5" cy="99" r="3.4"/>
+    <circle cx="88" cy="99" r="3.4"/><circle cx="98.5" cy="99" r="3.4"/>
+    <rect x="40" y="104.5" width="44" height="5.5" rx="2.75"/>
+  </g>
+  <!-- the return key, picked out in orange -->
+  <circle cx="108" cy="99" r="3.4" fill="#e95420"/>
+</svg>

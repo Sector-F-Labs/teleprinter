@@ -10,6 +10,18 @@ mod session;
 mod tiles;
 mod view;
 
+/// The window icon, rendered from `packaging/linux/teleprinter.svg` by `make
+/// icons`. On Wayland, GNOME shows the installed launcher's icon instead.
+const WINDOW_ICON_PNG: &[u8] = include_bytes!("../assets/teleprinter-icon-128.png");
+
+fn window_icon() -> egui::IconData {
+    let icon = image::load_from_memory_with_format(WINDOW_ICON_PNG, image::ImageFormat::Png)
+        .expect("embedded window icon should decode as PNG")
+        .into_rgba8();
+    let (width, height) = icon.dimensions();
+    egui::IconData { rgba: icon.into_raw(), width, height }
+}
+
 fn main() -> eframe::Result {
     let config = config::Config::load();
     let custom_frame = !config.system_title_bar;
@@ -18,6 +30,7 @@ fn main() -> eframe::Result {
             egui::ViewportBuilder::default()
                 .with_title("Teleprinter")
                 .with_app_id("com.sectorflabs.Teleprinter")
+                .with_icon(window_icon())
                 .with_inner_size([820.0, 520.0])
                 .with_min_inner_size([320.0, 200.0]),
             custom_frame,
