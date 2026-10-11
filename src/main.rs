@@ -20,7 +20,11 @@ fn window_icon() -> egui::IconData {
         .expect("embedded window icon should decode as PNG")
         .into_rgba8();
     let (width, height) = icon.dimensions();
-    egui::IconData { rgba: icon.into_raw(), width, height }
+    egui::IconData {
+        rgba: icon.into_raw(),
+        width,
+        height,
+    }
 }
 
 fn main() -> eframe::Result {
@@ -36,11 +40,15 @@ fn main() -> eframe::Result {
                 .with_title("Teleprinter")
                 .with_app_id("com.sectorflabs.Teleprinter")
                 .with_icon(window_icon())
-                .with_inner_size([820.0, 520.0])
+                .with_inner_size([1280.0, 800.0])
                 .with_min_inner_size([320.0, 200.0]),
             custom_frame,
         ),
         ..Default::default()
     };
-    eframe::run_native("teleprinter", options, Box::new(|cc| Ok(Box::new(app::App::new(cc, config)))))
+    eframe::run_native(
+        "teleprinter",
+        options,
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, config)))),
+    )
 }
