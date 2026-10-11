@@ -51,6 +51,8 @@ mechanics of adding one.
 | [0007](0007-collapse-panes-to-their-title-bars.md) | Collapse panes to their title bars, and give the space to their neighbours | Accepted |
 | [0008](0008-drag-moves-panes-like-a-tiling-window-manager.md) | Dragging moves a pane like a tiling window manager; holding still swaps | Accepted |
 | [0009](0009-control-socket-for-scripts-and-agents.md) | A control socket lets programs in a pane open, move and close panes | Proposed |
+| [0010](0010-report-the-wheel-to-programs-that-ask-for-the-mouse.md) | Report the wheel to programs that ask for the mouse; Shift keeps it local | Accepted, partly superseded by [0011](0011-report-clicks-and-drags-shift-selects.md) |
+| [0011](0011-report-clicks-and-drags-shift-selects.md) | Report clicks and drags to programs that ask for the mouse; Shift selects | Accepted |
 
 ## Decision Relationship
 
@@ -65,6 +67,8 @@ flowchart TD
     E -.superseded in part by.-> H[0008: drag moves like a tiling WM]
     G --> H
     H --> I[0009: control socket for scripts and agents]
+    A --> J[0010: wheel reported to mouse-tracking programs]
+    J -.superseded in part by.-> K[0011: clicks and drags too; Shift selects]
 ```
 
 ## Revisit Triggers

@@ -410,30 +410,35 @@ impl App {
                 let response = view::show(ui, session, &mut pane.view, palette, font_size, requests, active);
                 let mut copy = false;
                 let mut paste = false;
-                response.context_menu(|ui| {
-                    if ui.button("Split Right").clicked() {
-                        actions.push(Action::Split(Dir::Right));
-                        ui.close();
-                    }
-                    if ui.button("Split Down").clicked() {
-                        actions.push(Action::Split(Dir::Down));
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Copy").clicked() {
-                        copy = true;
-                        ui.close();
-                    }
-                    if ui.button("Paste").clicked() {
-                        paste = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Close").clicked() {
-                        actions.push(Action::Close(id));
-                        ui.close();
-                    }
-                });
+                // A program tracking the mouse gets the right-click; Shift+right-click is the menu.
+                // Only the opening click is held back, so a menu already open stays open.
+                let program_click = response.secondary_clicked() && view::takes_right_click(ui, session);
+                if !program_click {
+                    response.context_menu(|ui| {
+                        if ui.button("Split Right").clicked() {
+                            actions.push(Action::Split(Dir::Right));
+                            ui.close();
+                        }
+                        if ui.button("Split Down").clicked() {
+                            actions.push(Action::Split(Dir::Down));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Copy").clicked() {
+                            copy = true;
+                            ui.close();
+                        }
+                        if ui.button("Paste").clicked() {
+                            paste = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Close").clicked() {
+                            actions.push(Action::Close(id));
+                            ui.close();
+                        }
+                    });
+                }
                 if copy {
                     actions.push(Action::Copy);
                 }

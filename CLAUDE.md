@@ -32,7 +32,8 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_COLLAPS
   (title, clipboard store, colour queries, child exit). Each event requests a repaint. Pane
   titles: the pty's foreground process from /proc, re-read on output (ADR-0006).
 - `src/view.rs`: the widget: cell metrics, painting, key → bytes (`key_bytes`), mouse selection,
-  wheel scrolling.
+  wheel scrolling; mouse reports (wheel, clicks, drags) to programs that track the mouse, Shift
+  keeping the mouse for selection (ADR-0010, ADR-0011).
 - `src/palette.rs`: ANSI palette from the skin's `[app.teleprinter]`, else from the visuals
   (ADR-0003).
 - `src/fonts.rs`: bundled MesloLGS NF (ADR-0002).

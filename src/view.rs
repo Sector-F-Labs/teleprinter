@@ -30,6 +30,10 @@ pub struct ViewState {
     scroll_rest: f32,
     /// An Alt+letter already sent as ESC+letter, whose Text event must be dropped.
     swallow_text: bool,
+    /// The button pressed on a program that tracks the mouse, until it's released.
+    mouse_down: Option<u8>,
+    /// The cell last reported to it, so motion is sent once per cell.
+    mouse_cell: Option<(usize, usize)>,
 }
 
 pub fn show(
@@ -250,8 +254,22 @@ fn handle_mouse(
     let mut term = session.term.lock();
     let size = (term.columns(), term.screen_lines());
     let offset = term.grid().display_offset();
+    let reporting = reports_mouse(*term.mode(), ui.input(|i| i.modifiers));
 
-    if let Some(pos) = response.interact_pointer_pos() {
+    if reporting {
+        drop(term);
+        report_buttons(ui, session, state, response, origin, cell, size);
+        term = session.term.lock();
+    } else if let Some(code) = state.mouse_down.take() {
+        // Shift went down mid-press, or the program stopped tracking: finish what it saw start.
+        let mode = *term.mode();
+        drop(term);
+        let at = state.mouse_cell.unwrap_or_default();
+        session.write(mouse_report(code, false, at, Modifiers::NONE, mode));
+        term = session.term.lock();
+    }
+
+    if let Some(pos) = response.interact_pointer_pos().filter(|_| !reporting) {
         let (point, side) = cell_at(pos, origin, cell, size, offset);
         let clicks = ui.input(|i| {
             if i.pointer.button_triple_clicked(egui::PointerButton::Primary) {
@@ -290,7 +308,14 @@ fn handle_mouse(
         state.scroll_rest -= lines as f32;
         if lines != 0 {
             let mode = *term.mode();
-            if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+            let (modifiers, pointer) = ui.input(|i| (i.modifiers, i.pointer.hover_pos()));
+            if reporting {
+                // The program tracks the mouse (Claude Code, full screen): it scrolls itself (ADR-0010).
+                drop(term);
+                let at = screen_cell(pointer.unwrap_or(origin), origin, cell, size);
+                let report = mouse_report(if lines > 0 { 64 } else { 65 }, true, at, modifiers, mode);
+                session.write(report.repeat(lines.unsigned_abs() as usize));
+            } else if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
                 // Full-screen programs (less, vim) get arrow keys instead, as in other terminals.
                 drop(term);
                 let key = if lines > 0 { Key::ArrowUp } else { Key::ArrowDown };
@@ -300,6 +325,100 @@ fn handle_mouse(
                 term.scroll_display(Scroll::Delta(lines));
             }
         }
+    }
+}
+
+/// Whether the mouse goes to the program: it asked for it, and Shift isn't keeping it for
+/// Teleprinter's selection and menu (ADR-0010, ADR-0011).
+fn reports_mouse(mode: TermMode, modifiers: Modifiers) -> bool {
+    mode.intersects(TermMode::MOUSE_MODE) && !modifiers.shift
+}
+
+/// Whether a right-click in this pane is the program's rather than the pane menu's.
+pub fn takes_right_click(ui: &egui::Ui, session: &Session) -> bool {
+    reports_mouse(*session.term.lock().mode(), ui.input(|i| i.modifiers))
+}
+
+/// The cell of the screen under `pos`, 0-based, whatever the scrollback shows.
+fn screen_cell(pos: Pos2, origin: Pos2, cell: Vec2, size: (usize, usize)) -> (usize, usize) {
+    let (point, _) = cell_at(pos, origin, cell, size, 0);
+    (point.column.0, point.line.0 as usize)
+}
+
+/// Presses, releases and drags for a program that tracks the mouse (ADR-0011). A press counts
+/// only on the terminal; its release and drags are reported wherever the pointer goes.
+fn report_buttons(
+    ui: &egui::Ui,
+    session: &mut Session,
+    state: &mut ViewState,
+    response: &egui::Response,
+    origin: Pos2,
+    cell: Vec2,
+    size: (usize, usize),
+) {
+    let mode = *session.term.lock().mode();
+    let (events, modifiers, any_down) = ui.input(|i| (i.events.clone(), i.modifiers, i.pointer.any_down()));
+    let mut out = Vec::new();
+    for event in events {
+        match event {
+            Event::PointerButton { pos, button, pressed, modifiers, .. } => {
+                let code = match button {
+                    egui::PointerButton::Primary => 0,
+                    egui::PointerButton::Middle => 1,
+                    egui::PointerButton::Secondary => 2,
+                    _ => continue,
+                };
+                let at = screen_cell(pos, origin, cell, size);
+                if pressed && state.mouse_down.is_none() && response.hovered() && response.rect.contains(pos) {
+                    state.mouse_down = Some(code);
+                    state.mouse_cell = Some(at);
+                    out.extend(mouse_report(code, true, at, modifiers, mode));
+                } else if !pressed && state.mouse_down == Some(code) {
+                    state.mouse_down = None;
+                    out.extend(mouse_report(code, false, at, modifiers, mode));
+                }
+            }
+            Event::PointerMoved(pos) => {
+                let at = screen_cell(pos, origin, cell, size);
+                if state.mouse_cell == Some(at) {
+                    continue;
+                }
+                // Motion is the button's code plus 32; 3 is no button, for `?1003`.
+                let code = match state.mouse_down {
+                    Some(code) if mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION) => code + 32,
+                    None if mode.contains(TermMode::MOUSE_MOTION) && response.rect.contains(pos) => 3 + 32,
+                    _ => continue,
+                };
+                state.mouse_cell = Some(at);
+                out.extend(mouse_report(code, true, at, modifiers, mode));
+            }
+            _ => {}
+        }
+    }
+    // Released where egui didn't see it (outside the window): don't leave the program dragging.
+    if let Some(code) = state.mouse_down.filter(|_| !any_down) {
+        state.mouse_down = None;
+        out.extend(mouse_report(code, false, state.mouse_cell.unwrap_or_default(), modifiers, mode));
+    }
+    if !out.is_empty() {
+        session.write(out);
+    }
+}
+
+/// A mouse report, xterm's way: `button` is 0–2 for left, middle and right, 64/65 for the wheel,
+/// plus 32 for motion; Shift adds 4, Alt 8, Ctrl 16. At a 0-based cell of the screen. SGR under
+/// `?1006` (`m` for a release), else the legacy bytes, where any release is button 3.
+fn mouse_report(button: u8, pressed: bool, (column, line): (usize, usize), modifiers: Modifiers, mode: TermMode) -> Vec<u8> {
+    let held = if modifiers.shift { 4 } else { 0 } + if modifiers.alt { 8 } else { 0 } + if modifiers.ctrl { 16 } else { 0 };
+    let (x, y) = (column + 1, line + 1);
+    if mode.contains(TermMode::SGR_MOUSE) {
+        let end = if pressed { 'M' } else { 'm' };
+        format!("\x1b[<{};{x};{y}{end}", button + held).into_bytes()
+    } else {
+        // Each value is one byte offset by 32, so columns and rows stop at 223.
+        let byte = |v: usize| (32 + v.min(223)) as u8;
+        let button = if pressed { button } else { 3 } + held;
+        vec![0x1b, b'[', b'M', byte(button as usize), byte(x), byte(y)]
     }
 }
 
@@ -422,6 +541,27 @@ mod tests {
         assert_eq!(bytes(Key::D, Modifiers::CTRL).as_deref(), Some("\x04"));
         assert_eq!(bytes(Key::OpenBracket, Modifiers::CTRL).as_deref(), Some("\x1b"));
         assert_eq!(bytes(Key::A, Modifiers::NONE), None, "plain letters come as Text");
+    }
+
+    #[test]
+    fn mouse_reports_follow_the_programs_encoding() {
+        let sgr = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        assert_eq!(mouse_report(64, true, (0, 0), Modifiers::NONE, sgr), b"\x1b[<64;1;1M");
+        assert_eq!(mouse_report(65, true, (9, 4), Modifiers::CTRL, sgr), b"\x1b[<81;10;5M");
+        assert_eq!(mouse_report(0, false, (9, 4), Modifiers::NONE, sgr), b"\x1b[<0;10;5m", "SGR releases keep the button");
+        assert_eq!(mouse_report(32, true, (1, 1), Modifiers::NONE, sgr), b"\x1b[<32;2;2M", "left drag");
+        let legacy = TermMode::MOUSE_REPORT_CLICK;
+        assert_eq!(mouse_report(64, true, (2, 3), Modifiers::ALT, legacy), b"\x1b[M\x68\x23\x24");
+        assert_eq!(mouse_report(65, true, (400, 0), Modifiers::NONE, legacy), b"\x1b[M\x61\xff\x21", "past 223 stays at 223");
+        assert_eq!(mouse_report(2, false, (0, 0), Modifiers::NONE, legacy), b"\x1b[M\x23\x21\x21", "legacy releases are button 3");
+    }
+
+    #[test]
+    fn shift_keeps_the_mouse_for_teleprinter() {
+        let tracking = TermMode::MOUSE_DRAG;
+        assert!(reports_mouse(tracking, Modifiers::NONE));
+        assert!(!reports_mouse(tracking, Modifiers::SHIFT));
+        assert!(!reports_mouse(TermMode::empty(), Modifiers::NONE), "no tracking: selection as ever");
     }
 
     #[test]
