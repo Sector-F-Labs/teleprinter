@@ -16,7 +16,7 @@ for sockets in `$XDG_RUNTIME_DIR/teleprinter/`: they belong to other windows.
 
 ```bash
 teleprinter msg split [--left|--right|--up|--down] [--pane ID] [--cwd DIR] [--focus] [-- PROGRAM ARGS…]
-teleprinter msg list            # panes: id, title, cwd, rect, collapsed, active
+teleprinter msg list            # panes: id, tab, title, cwd, rect, collapsed, active
 teleprinter msg close [ID]
 teleprinter msg focus ID
 ```

@@ -1,5 +1,6 @@
 //! The window: Patina's frame and title bar around the tiled panes, each a
-//! terminal session in a pinned egui window (ADR-0005).
+//! terminal session in a pinned egui window (ADR-0005). Tabs in the title
+//! bar each hold a layout of panes (ADR-0012).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,6 +42,22 @@ enum Action {
     Close(PaneId),
     /// A new pane in the empty space at this point (the background's menu).
     NewAt(egui::Pos2),
+    NewTab,
+    ShowTab(usize),
+    CloseTab(usize),
+}
+
+/// A tab: a layout of panes of its own, shown in place of the others.
+struct Tab {
+    tree: Node,
+    /// The pane that has the keyboard while the tab is shown.
+    active: PaneId,
+}
+
+impl Tab {
+    fn new(pane: PaneId) -> Self {
+        Self { tree: Node::Leaf(pane), active: pane }
+    }
 }
 
 struct Pane {
@@ -53,10 +70,12 @@ pub struct App {
     custom_frame: bool,
     skins: Vec<Skin>,
     skin_errors: Vec<String>,
+    /// Every tab's panes.
     panes: HashMap<PaneId, Pane>,
-    tree: Node,
-    /// The pane that has the keyboard, and that splits and menu actions act on.
-    active: PaneId,
+    /// Never empty: closing the last tab closes the window.
+    tabs: Vec<Tab>,
+    /// The tab shown; its active pane has the keyboard, and splits and menu actions act on it.
+    tab: usize,
     next_id: PaneId,
     /// The pane whose title bar is being dragged onto another, to swap them.
     dragging: Option<PaneId>,
@@ -64,7 +83,7 @@ pub struct App {
     hovering: Option<(PaneId, f64)>,
     /// How tall a collapsed pane is: its title bar, measured from the panes shown.
     title_height: f32,
-    /// Where each pane was last laid out, for placing a new one in empty space.
+    /// Where each pane of the shown tab was last laid out, for placing a new one in empty space.
     tiles: Vec<(PaneId, Rect)>,
     /// Where the background was right-clicked, for its menu.
     menu_at: Option<egui::Pos2>,
@@ -98,8 +117,8 @@ impl App {
             skins,
             skin_errors,
             panes: HashMap::new(),
-            tree: Node::Leaf(1),
-            active: 1,
+            tabs: Vec::new(),
+            tab: 0,
             next_id: 1,
             dragging: None,
             hovering: None,
@@ -112,8 +131,7 @@ impl App {
             control,
         };
         let first = app.spawn(&cc.egui_ctx, None, dirs::home_dir(), HashMap::new());
-        app.tree = Node::Leaf(first);
-        app.active = first;
+        app.tabs.push(Tab::new(first));
         // `TELEPRINTER_SPLITS=right,down` splits the active pane in turn at start
         // (for screenshots).
         for split in std::env::var("TELEPRINTER_SPLITS").unwrap_or_default().split(',') {
@@ -123,6 +141,12 @@ impl App {
                 _ => {}
             }
         }
+        // `TELEPRINTER_TABS=3` opens that many tabs, showing the first (for screenshots).
+        let tabs = std::env::var("TELEPRINTER_TABS").ok().and_then(|n| n.trim().parse().ok()).unwrap_or(1);
+        for _ in 1..tabs {
+            app.new_tab(&cc.egui_ctx);
+        }
+        app.show_tab(0);
         // `TELEPRINTER_COLLAPSED=2,3` starts those panes collapsed (for screenshots).
         for id in std::env::var("TELEPRINTER_COLLAPSED").unwrap_or_default().split(',') {
             if let Ok(id) = id.trim().parse() {
@@ -152,22 +176,65 @@ impl App {
         id
     }
 
+    /// A pane's shell's directory, else the home directory.
+    fn cwd(&self, id: PaneId) -> Option<PathBuf> {
+        self.panes.get(&id).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd).or_else(dirs::home_dir)
+    }
+
     /// Splits the active pane; the new one starts in the same directory and
     /// takes the keyboard.
     fn split(&mut self, ctx: &egui::Context, dir: Dir) {
-        let cwd = self.panes.get(&self.active).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
-        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir), HashMap::new());
-        self.tree.split(self.active, dir, id);
+        let active = self.active();
+        let id = self.spawn(ctx, None, self.cwd(active), HashMap::new());
+        self.shown_mut().tree.split(active, dir, id);
         self.activate(id);
+    }
+
+    /// A tab with one pane, in the active pane's directory, shown.
+    fn new_tab(&mut self, ctx: &egui::Context) {
+        let id = self.spawn(ctx, None, self.cwd(self.active()), HashMap::new());
+        self.tabs.push(Tab::new(id));
+        self.show_tab(self.tabs.len() - 1);
+    }
+
+    fn show_tab(&mut self, tab: usize) {
+        self.tab = tab.min(self.tabs.len() - 1);
+        self.dragging = None;
+        self.hovering = None;
+        self.requests.focus = true;
+    }
+
+    /// Closes every pane in a tab, and so the tab.
+    fn close_tab(&mut self, ctx: &egui::Context, tab: usize) {
+        for id in self.tabs.get(tab).map(|t| t.tree.panes()).unwrap_or_default() {
+            self.close(ctx, id);
+        }
+    }
+
+    fn shown(&self) -> &Tab {
+        &self.tabs[self.tab]
+    }
+
+    fn shown_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.tab]
+    }
+
+    /// The pane with the keyboard.
+    fn active(&self) -> PaneId {
+        self.shown().active
+    }
+
+    /// The tab a pane is in.
+    fn tab_of(&self, id: PaneId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.tree.panes().contains(&id))
     }
 
     /// A new pane in the empty space at `at`: below the pane above it in that
     /// column (the space folded panes leave), or below the active pane.
     fn new_at(&mut self, ctx: &egui::Context, at: egui::Pos2) {
         let target = self.pane_above(at);
-        let cwd = self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd);
-        let id = self.spawn(ctx, None, cwd.or_else(dirs::home_dir), HashMap::new());
-        self.tree.insert(target, Side::Bottom, id);
+        let id = self.spawn(ctx, None, self.cwd(target), HashMap::new());
+        self.shown_mut().tree.insert(target, Side::Bottom, id);
         self.activate(id);
     }
 
@@ -181,42 +248,46 @@ impl App {
     }
 
     fn answer(&mut self, ctx: &egui::Context, request: Request) -> serde_json::Value {
-        let known = |app: &Self, id| app.tree.panes().contains(&id);
+        let known = |app: &Self, id| app.tab_of(id).is_some();
         match request {
             Request::Split { pane, side, command, cwd, focus, env } => {
-                let target = pane.unwrap_or(self.active);
-                if !known(self, target) {
+                let target = pane.unwrap_or(self.active());
+                let Some(tab) = self.tab_of(target) else {
                     return control::error(format!("no pane {target}"));
-                }
-                let cwd = cwd.or_else(|| self.panes.get(&target).and_then(|p| p.session.as_ref().ok()).and_then(Session::cwd));
+                };
+                let cwd = cwd.or_else(|| self.cwd(target));
                 let command = command.split_first().map(|(program, args)| (program.clone(), args.to_vec()));
-                let id = self.spawn(ctx, command, cwd.or_else(dirs::home_dir), env);
+                let id = self.spawn(ctx, command, cwd, env);
                 if let Some(Err(e)) = self.panes.get(&id).map(|p| &p.session) {
                     let e = e.clone();
                     self.panes.remove(&id);
                     return control::error(format!("couldn't start it: {e}"));
                 }
-                self.tree.split_side(target, side.into(), id);
+                // In the target's tab, shown or not.
+                self.tabs[tab].tree.split_side(target, side.into(), id);
                 if focus {
                     self.activate(id);
                 }
                 control::ok(serde_json::json!({ "pane": id }))
             }
             Request::List => {
-                let panes: Vec<_> = self
-                    .tree
-                    .panes()
-                    .into_iter()
-                    .map(|id| {
+                let panes: Vec<_> = (self.tabs.iter().enumerate())
+                    .flat_map(|(t, tab)| tab.tree.panes().into_iter().map(move |id| (t, id)))
+                    .map(|(t, id)| {
                         let session = self.panes.get(&id).and_then(|p| p.session.as_ref().ok());
-                        let rect = self.tiles.iter().find(|(t, _)| *t == id).map(|(_, r)| [r.left(), r.top(), r.width(), r.height()]);
+                        // Only the shown tab's panes are laid out.
+                        let rect = (t == self.tab)
+                            .then(|| self.tiles.iter().find(|(p, _)| *p == id))
+                            .flatten()
+                            .map(|(_, r)| [r.left(), r.top(), r.width(), r.height()]);
                         serde_json::json!({
                             "pane": id,
+                            "tab": t + 1,
                             "title": self.title(id),
                             "cwd": session.and_then(Session::cwd),
                             "rect": rect,
                             "collapsed": collapsed(ctx, id),
-                            "active": id == self.active,
+                            "active": t == self.tab && id == self.active(),
                         })
                     })
                     .collect();
@@ -241,24 +312,36 @@ impl App {
             .iter()
             .filter(|(_, r)| r.x_range().contains(at.x) && r.bottom() <= at.y)
             .max_by(|a, b| a.1.bottom().total_cmp(&b.1.bottom()))
-            .map_or(self.active, |(id, _)| *id)
+            .map_or(self.active(), |(id, _)| *id)
     }
 
-    /// Closes a pane; closing the last one closes the window.
+    /// Closes a pane; closing a tab's last one closes the tab, and the last
+    /// tab's the window.
     fn close(&mut self, ctx: &egui::Context, id: PaneId) {
-        if !self.tree.remove(id) {
+        let Some(t) = self.tab_of(id) else { return };
+        let tab = &mut self.tabs[t];
+        if tab.tree.remove(id) {
+            if tab.active == id {
+                tab.active = tab.tree.panes()[0];
+            }
+        } else if self.tabs.len() == 1 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
+        } else {
+            // The next tab takes its place, or the one before it at the end.
+            self.tabs.remove(t);
+            self.show_tab(if t < self.tab { self.tab - 1 } else { self.tab });
         }
         self.panes.remove(&id);
-        if self.active == id {
-            let next = self.tree.panes()[0];
-            self.activate(next);
-        }
+        self.requests.focus = true;
     }
 
+    /// Gives a pane the keyboard, showing its tab.
     fn activate(&mut self, id: PaneId) {
-        self.active = id;
+        if let Some(t) = self.tab_of(id) {
+            self.tab = t;
+            self.tabs[t].active = id;
+        }
         self.requests.focus = true;
     }
 
@@ -294,7 +377,16 @@ impl App {
                 ui.close();
             }
             if ui.button("Close Pane").clicked() {
-                actions.push(Action::Close(self.active));
+                actions.push(Action::Close(self.active()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.add(egui::Button::new("New Tab").shortcut_text("Ctrl+Shift+T")).clicked() {
+                actions.push(Action::NewTab);
+                ui.close();
+            }
+            if ui.button("Close Tab").clicked() {
+                actions.push(Action::CloseTab(self.tab));
                 ui.close();
             }
             ui.separator();
@@ -343,6 +435,50 @@ impl App {
         });
     }
 
+    /// The tabs, after the menus, each named for its active pane, then +
+    /// for a new one. They share the bar's width, up to a limit each, and
+    /// span its height (`span`, padding and all). The shown one is filled
+    /// in the panel colour, joining it to the panes below; on a bar that's
+    /// already that colour, in the extreme background colour instead.
+    fn tab_strip(&self, ui: &mut egui::Ui, span: egui::Rangef, bar: egui::Color32, actions: &mut Vec<Action>) {
+        const PLUS: f32 = 32.0;
+        let global = ui.ctx().global_style();
+        let shown = if bar == global.visuals.panel_fill { global.visuals.extreme_bg_color } else { global.visuals.panel_fill };
+        // The menus' text colour, and the panes' for the shown tab.
+        let ink = ui.visuals().widgets.inactive.text_color();
+        ui.separator();
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let n = self.tabs.len() as f32;
+        let width = ((ui.available_width() - PLUS) / n).clamp(48.0, 200.0);
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let title = self.title(tab.active);
+            let (fill, ink) = if i == self.tab { (Some(shown), global.visuals.strong_text_color()) } else { (None, ink) };
+            let response = tab_shape(ui, Id::new(("tab", i)), width, span, &title, fill, ink).on_hover_text(&title);
+            // Hovered, a tab has a close button, after its own registration so it wins.
+            if ui.rect_contains_pointer(response.rect) && tab_close(ui, Id::new(("tab-close", i)), response.rect, ink) {
+                actions.push(Action::CloseTab(i));
+            } else if response.clicked() {
+                actions.push(Action::ShowTab(i));
+            }
+            if response.middle_clicked() {
+                actions.push(Action::CloseTab(i));
+            }
+            response.context_menu(|ui| {
+                if ui.button("New Tab").clicked() {
+                    actions.push(Action::NewTab);
+                    ui.close();
+                }
+                if ui.button("Close Tab").clicked() {
+                    actions.push(Action::CloseTab(i));
+                    ui.close();
+                }
+            });
+        }
+        if tab_shape(ui, Id::new("new-tab"), PLUS, span, "+", None, ink).on_hover_text("New Tab (Ctrl+Shift+T)").clicked() {
+            actions.push(Action::NewTab);
+        }
+    }
+
     /// One pane: its session in an egui window pinned to `rect`, the same
     /// window whichever tile it's in. Returns the window's title strip, for
     /// dragging.
@@ -355,9 +491,9 @@ impl App {
         actions: &mut Vec<Action>,
     ) -> Option<(Rect, egui::LayerId)> {
         let title = self.title(id);
-        let active = id == self.active;
+        let active = id == self.active();
         let style = ctx.global_style();
-        let several = self.panes.len() > 1;
+        let several = self.shown().tree.panes().len() > 1;
         // The active pane's border is the selection colour, once there's more than one.
         let stroke = if active && several {
             egui::Stroke::new(1.5, style.visuals.selection.bg_fill)
@@ -375,19 +511,23 @@ impl App {
         let mut content_top = None;
         // egui sizes a collapsed window's title bar to its text, so the text is sized to
         // fill the tile: its width less the arrow, the close button and the gaps around them.
+        // In the body size, as the rest of the bar's and menus' text is, not egui's heading size;
+        // the title bar keeps the heading's height, which egui sizes its buttons by.
+        let text_style = egui::TextStyle::Body;
+        let label = egui::RichText::new(title.clone()).text_style(text_style.clone());
         let title: egui::Atoms<'static> = if collapsed(ctx, id) {
             use egui::AtomExt;
             let button = ctx.fonts_mut(|f| f.row_height(&egui::TextStyle::Heading.resolve(&style)));
             let gaps = 4.0 * style.spacing.item_spacing.x;
             let width = rect.width() - margin.sum().x - 2.0 * button - gaps;
             // Centred like an open window's title: equal spacers either side of the text.
-            let font = egui::TextStyle::Heading.resolve(&style);
-            let text = ctx.fonts_mut(|f| f.layout_no_wrap(title.clone(), font, egui::Color32::WHITE).size().x);
+            let font = text_style.resolve(&style);
+            let text = ctx.fonts_mut(|f| f.layout_no_wrap(title, font, egui::Color32::WHITE).size().x);
             let side = ((width - text) / 2.0 - style.spacing.item_spacing.x).max(0.0);
             let spacer = |n: u8| egui::Atom::custom(Id::new(("title-spacer", id, n)), egui::vec2(side, 0.0));
-            egui::Atoms::new((spacer(0), title.atom_size(egui::vec2(text, button)), spacer(1)))
+            egui::Atoms::new((spacer(0), label.atom_size(egui::vec2(text, button)), spacer(1)))
         } else {
-            egui::Atoms::new(title)
+            egui::Atoms::new(label)
         };
         let shown = egui::Window::new(title)
             .id(pane_id(id))
@@ -452,7 +592,7 @@ impl App {
             actions.push(Action::Close(id));
         }
         if shown.inner == Some(true) && !active {
-            self.active = id;
+            self.shown_mut().active = id;
         }
         let window = shown.response.rect;
         // The title bar, less the collapse arrow at its left end and the close button at its
@@ -476,20 +616,37 @@ impl App {
         Some((strip, shown.response.layer_id))
     }
 
-    /// A tile's title bar, as a handle: drag it onto another tile to swap them.
-    fn drag_handle(&mut self, ctx: &egui::Context, id: PaneId, strip: Rect, layer: egui::LayerId) {
+    /// A tile's title bar, as a handle: drag it onto another tile to swap them,
+    /// right-click it for the split menu.
+    fn drag_handle(&mut self, ctx: &egui::Context, id: PaneId, strip: Rect, layer: egui::LayerId, actions: &mut Vec<Action>) {
         // The Ui and the handle need ids of their own; sharing one, the handle never got dragged.
         let ui = egui::Ui::new(ctx.clone(), Id::new(("pane-handle-ui", id)), egui::UiBuilder::new().layer_id(layer).max_rect(strip));
         let response = ui.interact(strip, Id::new(("pane-handle", id)), egui::Sense::click_and_drag());
-        if self.panes.len() > 1 {
+        let several = self.shown().tree.panes().len() > 1;
+        if several {
             response.clone().on_hover_cursor(egui::CursorIcon::Grab);
         }
         if response.double_clicked() {
             set_collapsed(ctx, id, !collapsed(ctx, id));
-        } else if response.clicked() {
+        } else if response.clicked() || response.secondary_clicked() {
             self.activate(id);
         }
-        if response.drag_started() && self.panes.len() > 1 {
+        response.context_menu(|ui| {
+            if ui.button("Split Right").clicked() {
+                actions.push(Action::Split(Dir::Right));
+                ui.close();
+            }
+            if ui.button("Split Down").clicked() {
+                actions.push(Action::Split(Dir::Down));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Close").clicked() {
+                actions.push(Action::Close(id));
+                ui.close();
+            }
+        });
+        if response.drag_started() && several {
             self.dragging = Some(id);
         }
     }
@@ -537,9 +694,9 @@ impl App {
         }
         if released {
             match drop {
-                Some((to, _, _)) if swap => self.tree.swap(from, to),
+                Some((to, _, _)) if swap => self.shown_mut().tree.swap(from, to),
                 Some((to, _, side)) => {
-                    self.tree.move_pane(from, to, side);
+                    self.shown_mut().tree.move_pane(from, to, side);
                 }
                 None => {}
             }
@@ -575,7 +732,7 @@ impl App {
                     Dir::Right => (pos.x - area.left()) / (area.width() - GAP),
                     Dir::Down => (pos.y - area.top()) / (area.height() - GAP),
                 };
-                self.tree.set_ratio(&divider.path, divider.index, ratio);
+                self.shown_mut().tree.set_ratio(&divider.path, divider.index, ratio);
             }
         });
     }
@@ -583,17 +740,17 @@ impl App {
     /// Every pane in its tile, the dividers between them, and dragging to swap.
     fn show_tiles(&mut self, ctx: &egui::Context, desktop: Rect, palette: &Palette, actions: &mut Vec<Action>) {
         let folded = |id| collapsed(ctx, id);
-        let (tiles, dividers) = self.tree.layout(desktop, GAP, &folded, self.title_height);
+        let (tiles, dividers) = self.shown().tree.layout(desktop, GAP, &folded, self.title_height);
         self.tiles = tiles.clone();
         // The keyboard goes to a pane that's open.
-        if folded(self.active)
-            && let Some(open) = self.tree.panes().into_iter().find(|id| !folded(*id))
+        if folded(self.active())
+            && let Some(open) = self.shown().tree.panes().into_iter().find(|id| !folded(*id))
         {
             self.activate(open);
         }
         for (id, rect) in &tiles {
             if let Some((strip, layer)) = self.show_pane(ctx, *id, *rect, palette, actions) {
-                self.drag_handle(ctx, *id, strip, layer);
+                self.drag_handle(ctx, *id, strip, layer, actions);
             }
         }
         for divider in &dividers {
@@ -634,11 +791,12 @@ impl eframe::App for App {
 
         self.answer_calls(&ctx);
         let mut exited = Vec::new();
+        let several = self.panes.len() > 1;
         for (id, pane) in &mut self.panes {
             if let Ok(session) = &mut pane.session {
                 session.pump(&ctx, &palette);
                 // Screenshots keep the last pane when its command ends, to have something to show.
-                if session.exited && (self.screenshot.is_none() || self.tree.panes().len() > 1) {
+                if session.exited && (self.screenshot.is_none() || several) {
                     exited.push(*id);
                 }
             }
@@ -647,17 +805,38 @@ impl eframe::App for App {
             self.close(&ctx, id);
         }
 
-        let title = match self.panes.len() {
-            0 | 1 => self.title(self.active),
-            n => format!("{} ({n} panes)", self.title(self.active)),
+        // For the taskbar: the title bar has the tabs instead.
+        let title = match self.shown().tree.panes().len() {
+            0 | 1 => self.title(self.active()),
+            n => format!("{} ({n} panes)", self.title(self.active())),
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
         let mut actions = Vec::new();
-        egui::Panel::top("header").frame(frame::header_frame(ui.style(), &style, radius)).show(ui, |ui| {
-            TitleBar::new(&title, &style).custom(self.custom_frame).menu_bar(true).show(
+        // Taken before the panes see them: these keys don't reach the shell.
+        ctx.input_mut(|i| {
+            if i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T) {
+                actions.push(Action::NewTab);
+            }
+            let n = self.tabs.len();
+            if i.consume_key(egui::Modifiers::CTRL, egui::Key::PageUp) {
+                actions.push(Action::ShowTab((self.tab + n - 1) % n));
+            }
+            if i.consume_key(egui::Modifiers::CTRL, egui::Key::PageDown) {
+                actions.push(Action::ShowTab((self.tab + 1) % n));
+            }
+        });
+        let header = frame::header_frame(ui.style(), &style, radius);
+        egui::Panel::top("header").frame(header).show(ui, |ui| {
+            // The bar's full height, for the tabs to fill.
+            let span = (ui.max_rect() + header.inner_margin).y_range();
+            // No title: each pane has its own, and the space is the tabs'.
+            TitleBar::new("", &style).custom(self.custom_frame).menu_bar(true).show(
                 ui,
-                |ui| self.menus(ui, &mut actions, &problems),
+                |ui| {
+                    self.menus(ui, &mut actions, &problems);
+                    self.tab_strip(ui, span, style.title_bar, &mut actions);
+                },
                 // A terminal's output is the shell's; nothing goes on the right.
                 |_ui| {},
             );
@@ -716,6 +895,9 @@ impl eframe::App for App {
                 Action::Split(dir) => self.split(&ctx, dir),
                 Action::Close(id) => self.close(&ctx, id),
                 Action::NewAt(at) => self.new_at(&ctx, at),
+                Action::NewTab => self.new_tab(&ctx),
+                Action::ShowTab(tab) => self.show_tab(tab),
+                Action::CloseTab(tab) => self.close_tab(&ctx, tab),
             }
             self.requests.focus = true;
         }
@@ -733,6 +915,42 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         frame::release_grab(ctx, raw_input);
     }
+}
+
+/// The side of a tab's close button.
+const TAB_CLOSE: f32 = 18.0;
+
+/// A tab in the title bar: `width` wide in the row, `span` tall, square
+/// whatever the skin's rounding, filled with `fill`, else when hovered.
+/// A tab wide enough for a close button keeps its text clear of one.
+fn tab_shape(ui: &mut egui::Ui, id: Id, width: f32, span: egui::Rangef, text: &str, fill: Option<egui::Color32>, ink: egui::Color32) -> egui::Response {
+    let (row, _) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y), egui::Sense::hover());
+    let rect = Rect::from_x_y_ranges(row.x_range(), span);
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let painter = ui.painter().with_clip_rect(rect);
+    // The pointer, not `hovered`: over the close button the tab isn't hovered, but is still lit.
+    if let Some(fill) = fill.or_else(|| ui.rect_contains_pointer(rect).then(|| ui.visuals().widgets.hovered.weak_bg_fill)) {
+        painter.rect_filled(rect, 0.0, fill);
+    }
+    let room = if width > 4.0 * TAB_CLOSE { width - 2.0 * TAB_CLOSE - 8.0 } else { width - 16.0 };
+    // Coloured here: the bar's override colour would win over the painter's.
+    let galley = egui::WidgetText::from(egui::RichText::new(text).color(ink)).into_galley(ui, Some(egui::TextWrapMode::Truncate), room, egui::TextStyle::Body);
+    painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
+    response
+}
+
+/// A tab's close button, a cross at its right end; whether it was clicked.
+fn tab_close(ui: &mut egui::Ui, id: Id, tab: Rect, ink: egui::Color32) -> bool {
+    let rect = Rect::from_center_size(egui::pos2(tab.right() - 6.0 - TAB_CLOSE / 2.0, tab.center().y), egui::Vec2::splat(TAB_CLOSE));
+    let response = ui.interact(rect, id, egui::Sense::click()).on_hover_text("Close Tab");
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.active.weak_bg_fill);
+    }
+    let (c, d) = (rect.center(), 4.0);
+    let stroke = egui::Stroke::new(1.2, ink);
+    ui.painter().line_segment([c + egui::vec2(-d, -d), c + egui::vec2(d, d)], stroke);
+    ui.painter().line_segment([c + egui::vec2(-d, d), c + egui::vec2(d, -d)], stroke);
+    response.clicked()
 }
 
 /// Whether a pane's window is collapsed, as its arrow left it: egui keeps
@@ -772,8 +990,8 @@ mod tests {
             skins,
             skin_errors: Vec::new(),
             panes: HashMap::from([(1, pane()), (2, pane())]),
-            tree,
-            active: 1,
+            tabs: vec![Tab { tree, active: 1 }],
+            tab: 0,
             next_id: 3,
             dragging: None,
             hovering: None,
@@ -837,7 +1055,7 @@ mod tests {
         // Test panes have no shell, so their windows are only as tall as their error
         // message; the open one moving up to the folded one's title bar shows the space moved.
         assert!(open.top() < before.top() - 150.0, "{open:?} was {before:?}");
-        assert_eq!(app.active, 2, "the keyboard moves to the open pane");
+        assert_eq!(app.active(), 2, "the keyboard moves to the open pane");
     }
 
     #[test]
@@ -850,7 +1068,7 @@ mod tests {
         frame(&ctx, &mut app, vec![]);
         assert_eq!(app.pane_above(pos2(100.0, 300.0)), 1);
         assert_eq!(app.pane_above(pos2(700.0, 300.0)), 2);
-        app.active = 2;
+        app.tabs[0].active = 2;
         assert_eq!(app.pane_above(pos2(100.0, 1.0)), 2, "nothing above: the active pane");
     }
 
@@ -877,11 +1095,11 @@ mod tests {
         let ctx = egui::Context::default();
         // 1 | (2 over 3); move 3 below 1: each column has two, evenly.
         let mut app = two_panes();
-        app.tree.split(2, Dir::Down, 3);
+        app.tabs[0].tree.split(2, Dir::Down, 3);
         app.panes.insert(3, Pane { session: Err("no shell in tests".into()), view: ViewState::default() });
         settle(&ctx, &mut app);
         assert!(window_rect(&ctx, 1).height() > 480.0);
-        app.tree.move_pane(3, 1, Side::Bottom);
+        app.tabs[0].tree.move_pane(3, 1, Side::Bottom);
         settle(&ctx, &mut app);
         assert!(window_rect(&ctx, 2).height() > 480.0, "2 fills the right: {:?}", window_rect(&ctx, 2));
         assert!(window_rect(&ctx, 1).height() < 260.0, "1 shares the left: {:?}", window_rect(&ctx, 1));
@@ -950,9 +1168,9 @@ mod tests {
         frame(&ctx, &mut app, vec![]);
         // Pane 1's title bar, then near the bottom of pane 2.
         drag(&ctx, &mut app, pos2(100.0, 15.0), pos2(600.0, 480.0));
-        assert_eq!(app.tree, Node::Split { dir: Dir::Down, children: vec![(Node::Leaf(2), 1.0), (Node::Leaf(1), 1.0)] });
+        assert_eq!(app.tabs[0].tree, Node::Split { dir: Dir::Down, children: vec![(Node::Leaf(2), 1.0), (Node::Leaf(1), 1.0)] });
         assert_eq!(app.dragging, None);
-        assert_eq!(app.active, 1, "the dragged pane stays active");
+        assert_eq!(app.active(), 1, "the dragged pane stays active");
     }
 
     #[test]
@@ -961,8 +1179,8 @@ mod tests {
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
         drag_and_hold(&ctx, &mut app, pos2(100.0, 15.0), pos2(600.0, 480.0), 15);
-        assert_eq!(app.tree.panes(), [2, 1]);
-        let Node::Split { dir, .. } = &app.tree else { panic!() };
+        assert_eq!(app.tabs[0].tree.panes(), [2, 1]);
+        let Node::Split { dir, .. } = &app.tabs[0].tree else { panic!() };
         assert_eq!(*dir, Dir::Right, "same shape, places traded");
     }
 
@@ -972,7 +1190,7 @@ mod tests {
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
         drag(&ctx, &mut app, pos2(100.0, 15.0), pos2(200.0, 250.0));
-        assert_eq!(app.tree.panes(), [1, 2]);
+        assert_eq!(app.tabs[0].tree.panes(), [1, 2]);
     }
 
     #[test]
@@ -980,9 +1198,124 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
-        let gap = app.tree.layout(DESKTOP, GAP, &|_| false, 34.0).1[0].rect.center();
+        let gap = app.tabs[0].tree.layout(DESKTOP, GAP, &|_| false, 34.0).1[0].rect.center();
         drag(&ctx, &mut app, gap, gap + vec2(-200.0, 0.0));
-        let tiles = app.tree.layout(DESKTOP, GAP, &|_| false, 34.0).0;
+        let tiles = app.tabs[0].tree.layout(DESKTOP, GAP, &|_| false, 34.0).0;
         assert!((tiles[0].1.width() - 200.0).abs() < 1.0, "{:?}", tiles[0].1);
+    }
+
+    #[test]
+    fn right_clicking_a_title_bar_activates_the_pane_and_opens_its_menu() {
+        let ctx = egui::Context::default();
+        let mut app = two_panes();
+        frame(&ctx, &mut app, vec![]);
+        let title = window_rect(&ctx, 2);
+        let at = pos2(title.center().x, title.top() + 15.0);
+        frame(&ctx, &mut app, vec![Event::PointerMoved(at)]);
+        let right = |pressed| Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Default::default() };
+        frame(&ctx, &mut app, vec![right(true)]);
+        frame(&ctx, &mut app, vec![right(false)]);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.active(), 2);
+        assert!(egui::Popup::is_any_open(&ctx), "the split menu is open");
+    }
+
+    /// Tabs: panes 1 | 2, and pane 3 alone, shown.
+    fn two_tabs() -> App {
+        let mut app = two_panes();
+        app.panes.insert(3, Pane { session: Err("no shell in tests".into()), view: ViewState::default() });
+        app.tabs.push(Tab::new(3));
+        app.tab = 1;
+        app
+    }
+
+    #[test]
+    fn only_the_shown_tab_is_laid_out() {
+        let ctx = egui::Context::default();
+        let mut app = two_tabs();
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.tiles.iter().map(|t| t.0).collect::<Vec<_>>(), [3]);
+        app.show_tab(0);
+        frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.tiles.iter().map(|t| t.0).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    #[test]
+    fn closing_a_tabs_last_pane_closes_the_tab() {
+        let ctx = egui::Context::default();
+        let mut app = two_tabs();
+        app.close(&ctx, 3);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!((app.tab, app.active()), (0, 1), "the tab before it is shown");
+        assert!(!app.panes.contains_key(&3));
+    }
+
+    #[test]
+    fn closing_a_pane_in_a_hidden_tab_leaves_the_shown_one() {
+        let ctx = egui::Context::default();
+        let mut app = two_tabs();
+        app.close(&ctx, 1);
+        assert_eq!(app.tabs[0].tree, Node::Leaf(2));
+        assert_eq!(app.tabs[0].active, 2);
+        assert_eq!((app.tab, app.active()), (1, 3));
+    }
+
+    #[test]
+    fn focusing_a_pane_over_the_socket_shows_its_tab() {
+        let ctx = egui::Context::default();
+        let mut app = two_tabs();
+        app.answer(&ctx, Request::Focus { pane: 2 });
+        assert_eq!((app.tab, app.active()), (0, 2));
+        let list = app.answer(&ctx, Request::List);
+        let tabs: Vec<_> = list["panes"].as_array().unwrap().iter().map(|p| p["tab"].as_u64().unwrap()).collect();
+        assert_eq!(tabs, [1, 1, 2]);
+    }
+
+    /// One frame of just the title bar, as `ui` draws it; the actions it asked for.
+    fn header_frame(ctx: &egui::Context, app: &App, events: Vec<Event>) -> Vec<Action> {
+        let time = TIME.with(|t| {
+            t.set(t.get() + 0.05);
+            t.get()
+        });
+        let input = RawInput { screen_rect: Some(DESKTOP), events, time: Some(time), ..Default::default() };
+        let mut actions = Vec::new();
+        let _ = ctx.run_ui(input, |ui| {
+            let style = app.skins[0].frame_style(ui.visuals());
+            let header = frame::header_frame(ui.style(), &style, 0);
+            egui::Panel::top("header").frame(header).show(ui, |ui| {
+                let span = (ui.max_rect() + header.inner_margin).y_range();
+                TitleBar::new("", &style).menu_bar(true).show(ui, |ui| app.tab_strip(ui, span, style.title_bar, &mut actions), |_| {});
+            });
+        });
+        actions
+    }
+
+    #[test]
+    fn a_tab_takes_clicks_from_the_top_of_the_bar() {
+        let ctx = egui::Context::default();
+        let app = two_tabs();
+        header_frame(&ctx, &app, vec![]);
+        let first = ctx.read_response(Id::new(("tab", 0))).unwrap().rect;
+        assert_eq!(first.top(), 0.0, "the tab starts at the window's top edge");
+        let at = pos2(first.center().x, 2.0);
+        header_frame(&ctx, &app, vec![Event::PointerMoved(at)]);
+        header_frame(&ctx, &app, vec![button(at, true)]);
+        let actions = header_frame(&ctx, &app, vec![button(at, false)]);
+        assert!(matches!(actions[..], [Action::ShowTab(0)]));
+    }
+
+    #[test]
+    fn a_hovered_tab_closes_from_its_cross() {
+        let ctx = egui::Context::default();
+        let app = two_tabs();
+        header_frame(&ctx, &app, vec![]);
+        let tab = ctx.read_response(Id::new(("tab", 0))).unwrap().rect;
+        header_frame(&ctx, &app, vec![Event::PointerMoved(tab.center())]);
+        let cross = ctx.read_response(Id::new(("tab-close", 0))).expect("hovered, the tab has a cross").rect;
+        let at = cross.center();
+        header_frame(&ctx, &app, vec![Event::PointerMoved(at)]);
+        header_frame(&ctx, &app, vec![button(at, true)]);
+        let actions = header_frame(&ctx, &app, vec![button(at, false)]);
+        assert!(matches!(actions[..], [Action::CloseTab(0)]));
     }
 }
