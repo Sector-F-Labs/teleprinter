@@ -64,8 +64,8 @@ make icons      # re-render assets/teleprinter-icon-128.png from packaging/linux
 ## Status
 
 A first prototype. Not yet: keyboard shortcuts for splitting and moving between panes, saving the
-layout, mouse reporting to programs (vim `mouse=a`, tmux), input methods,
-tabs, choosing a font, fonts for CJK and other scripts Meslo lacks.
+layout, reordering tabs or moving panes between them, input methods, choosing a font, fonts for
+CJK and other scripts Meslo lacks.
 
 ## Licence
 
