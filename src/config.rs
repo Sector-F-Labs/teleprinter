@@ -10,11 +10,15 @@ pub struct Config {
     pub skin: Option<String>,
     pub system_title_bar: bool,
     pub font_size: f32,
+    /// Space between panes, and around them, in points; 0 has them touch.
+    pub gap: f32,
+    /// How tall a pane's title bar is, in points, down to what its buttons need.
+    pub pane_title_height: f32,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { skin: None, system_title_bar: false, font_size: 14.0 }
+        Self { skin: None, system_title_bar: false, font_size: 14.0, gap: 0.0, pane_title_height: 28.0 }
     }
 }
 

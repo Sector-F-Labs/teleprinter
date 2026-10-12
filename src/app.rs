@@ -23,8 +23,15 @@ const HOME_SKIN: &str = "Default";
 const MIN_FONT: f32 = 8.0;
 const MAX_FONT: f32 = 32.0;
 
-/// Space between tiles, and around them; dividers are dragged in it.
-const GAP: f32 = 4.0;
+/// The gap between tiles, and around them, that View > Gaps Between Panes
+/// turns on; `gap` in the config sets any other (none by default).
+const GAP_ON: f32 = 4.0;
+const MAX_GAP: f32 = 32.0;
+const MAX_PANE_TITLE: f32 = 64.0;
+
+/// How wide a divider's handle is at least, over the panes' edges when the
+/// gap is narrower.
+const GRAB: f32 = 8.0;
 
 /// Seconds a dragged pane must stay over another before dropping swaps them.
 const SWAP_AFTER: f64 = 0.6;
@@ -35,6 +42,7 @@ enum Action {
     SetSkin(String),
     SystemTitleBar(bool),
     FontSize(f32),
+    Gap(f32),
     Copy,
     Paste,
     /// Split the active pane.
@@ -85,6 +93,8 @@ pub struct App {
     title_height: f32,
     /// Where each pane of the shown tab was last laid out, for placing a new one in empty space.
     tiles: Vec<(PaneId, Rect)>,
+    /// The window's corner radius this frame (0 maximised), for panes in its bottom corners.
+    radius: u8,
     /// Where the background was right-clicked, for its menu.
     menu_at: Option<egui::Pos2>,
     /// `TELEPRINTER_COMMAND`, run in every pane instead of the login shell.
@@ -124,6 +134,7 @@ impl App {
             hovering: None,
             tiles: Vec::new(),
             menu_at: None,
+            radius: 0,
             title_height: 34.0,
             command,
             requests: Requests { focus: true, ..Default::default() },
@@ -352,6 +363,11 @@ impl App {
         find(self.config.skin.as_deref().unwrap_or(HOME_SKIN)).or_else(|| find(HOME_SKIN)).unwrap_or(&self.skins[0])
     }
 
+    /// The space between panes and around them, as the config sets it.
+    fn gap(&self) -> f32 {
+        self.config.gap.clamp(0.0, MAX_GAP)
+    }
+
     fn save_config(&self) {
         if self.screenshot.is_none() && std::env::var_os("TELEPRINTER_SKIN").is_none() {
             self.config.save();
@@ -417,6 +433,10 @@ impl App {
                 actions.push(Action::FontSize(Config::default().font_size));
             }
             ui.separator();
+            let mut gaps = self.gap() > 0.0;
+            if ui.checkbox(&mut gaps, "Gaps Between Panes").changed() {
+                actions.push(Action::Gap(if gaps { GAP_ON } else { 0.0 }));
+            }
             let mut system = !self.custom_frame;
             if ui.checkbox(&mut system, "System Title Bar").changed() {
                 actions.push(Action::SystemTitleBar(system));
@@ -487,6 +507,7 @@ impl App {
         ctx: &egui::Context,
         id: PaneId,
         rect: Rect,
+        corners: egui::CornerRadius,
         palette: &Palette,
         actions: &mut Vec<Action>,
     ) -> Option<(Rect, egui::LayerId)> {
@@ -500,7 +521,14 @@ impl App {
         } else {
             style.visuals.window_stroke
         };
-        let frame = egui::Frame::window(&style).shadow(egui::Shadow::NONE).stroke(stroke).fill(palette.background);
+        let mut frame = egui::Frame::window(&style).shadow(egui::Shadow::NONE).stroke(stroke).fill(palette.background).corner_radius(corners);
+        // egui's title bar is a heading's row, which its buttons are sized to, inside the frame's
+        // margin; the margin above and below makes up the configured height. The content gets
+        // the same margin, as egui gives it.
+        let row = ctx.fonts_mut(|f| f.row_height(&egui::TextStyle::Heading.resolve(&style)));
+        let spare = (self.config.pane_title_height.min(MAX_PANE_TITLE) - row).max(0.0);
+        frame.inner_margin.top = (spare / 2.0).floor() as i8;
+        frame.inner_margin.bottom = (spare - (spare / 2.0).floor()).round() as i8;
         let margin = frame.total_margin();
         let mut open = true;
         let font_size = self.config.font_size;
@@ -706,11 +734,21 @@ impl App {
         }
     }
 
-    /// The handle in the gap between two sides of a split, for resizing it.
-    fn divider(&mut self, ctx: &egui::Context, divider: &Divider) {
+    /// The handle in the gap between two sides of a split, for resizing it:
+    /// at least `GRAB` wide, over the panes' edges (their frames' margins)
+    /// where the gap is narrower, and above the panes for that.
+    /// `spacing` is the layout's, negative where panes overlap.
+    fn divider(&mut self, ctx: &egui::Context, divider: &Divider, spacing: f32) {
         let id = Id::new(("divider", &divider.path, divider.index));
-        egui::Area::new(id).fixed_pos(divider.rect.min).constrain(false).show(ctx, |ui| {
-            let (rect, response) = ui.allocate_exact_size(divider.rect.size(), egui::Sense::drag());
+        // Across the split, the divider is `spacing` wide: none, or less, where panes overlap.
+        let (c, size) = (divider.rect.center(), divider.rect.size());
+        let handle = match divider.dir {
+            Dir::Right => Rect::from_center_size(c, egui::vec2(size.x.abs().max(GRAB), size.y)),
+            Dir::Down => Rect::from_center_size(c, egui::vec2(size.x, size.y.abs().max(GRAB))),
+        };
+        let gap = spacing;
+        egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(handle.min).constrain(false).show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(handle.size(), egui::Sense::drag());
             let cursor = match divider.dir {
                 Dir::Right => egui::CursorIcon::ResizeHorizontal,
                 Dir::Down => egui::CursorIcon::ResizeVertical,
@@ -729,8 +767,8 @@ impl App {
             {
                 let area = divider.area;
                 let ratio = match divider.dir {
-                    Dir::Right => (pos.x - area.left()) / (area.width() - GAP),
-                    Dir::Down => (pos.y - area.top()) / (area.height() - GAP),
+                    Dir::Right => (pos.x - area.left()) / (area.width() - gap),
+                    Dir::Down => (pos.y - area.top()) / (area.height() - gap),
                 };
                 self.shown_mut().tree.set_ratio(&divider.path, divider.index, ratio);
             }
@@ -740,7 +778,8 @@ impl App {
     /// Every pane in its tile, the dividers between them, and dragging to swap.
     fn show_tiles(&mut self, ctx: &egui::Context, desktop: Rect, palette: &Palette, actions: &mut Vec<Action>) {
         let folded = |id| collapsed(ctx, id);
-        let (tiles, dividers) = self.shown().tree.layout(desktop, GAP, &folded, self.title_height);
+        let (area, spacing) = self.tile_area(ctx, desktop);
+        let (tiles, dividers) = self.shown().tree.layout(area, spacing, &folded, self.title_height);
         self.tiles = tiles.clone();
         // The keyboard goes to a pane that's open.
         if folded(self.active())
@@ -748,15 +787,47 @@ impl App {
         {
             self.activate(open);
         }
+        // Touching, panes are square, but for the window's own rounded bottom corners.
+        let gap = self.gap();
+        let rounded = egui::Frame::window(&ctx.global_style()).corner_radius;
         for (id, rect) in &tiles {
-            if let Some((strip, layer)) = self.show_pane(ctx, *id, *rect, palette, actions) {
+            let corners = if gap > 0.0 {
+                rounded
+            } else {
+                let touch = |a: f32, b: f32| (a - b).abs() < 0.5;
+                let bottom = touch(rect.bottom(), area.bottom());
+                let corner = |side: f32, edge: f32| if bottom && touch(side, edge) { self.radius } else { 0 };
+                egui::CornerRadius {
+                    sw: corner(rect.left(), area.left()),
+                    se: corner(rect.right(), area.right()),
+                    ..Default::default()
+                }
+            };
+            if let Some((strip, layer)) = self.show_pane(ctx, *id, *rect, corners, palette, actions) {
                 self.drag_handle(ctx, *id, strip, layer, actions);
             }
         }
+        // Overlapping, the active pane is drawn last, so its accent border is whole.
+        if gap == 0.0 {
+            ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, pane_id(self.active())));
+        }
         for divider in &dividers {
-            self.divider(ctx, divider);
+            self.divider(ctx, divider, spacing);
         }
         self.drag_to_move(ctx, &tiles);
+    }
+
+    /// Where the tiles go in `desktop`, and the spacing between them. With
+    /// no gap, neighbours overlap by a border's width and the outer panes
+    /// reach a border past the desktop, so every edge is one line: shared
+    /// between two panes, or with the window's edge or the title bar's.
+    fn tile_area(&self, ctx: &egui::Context, desktop: Rect) -> (Rect, f32) {
+        let gap = self.gap();
+        if gap > 0.0 {
+            return (desktop, gap);
+        }
+        let border = ctx.global_style().visuals.window_stroke.width;
+        (desktop.expand(border), -border)
     }
 
     fn take_screenshot(&mut self, ctx: &egui::Context) {
@@ -788,6 +859,7 @@ impl eframe::App for App {
         let style = self.skin().frame_style(ui.visuals());
         let (palette, problems) = Palette::new(self.skin(), ui.visuals());
         let radius = if self.custom_frame { frame::corner_radius(&ctx, style.radius) } else { 0 };
+        self.radius = radius;
 
         self.answer_calls(&ctx);
         let mut exited = Vec::new();
@@ -844,7 +916,7 @@ impl eframe::App for App {
 
         // The tiles sit on the window's own panel colour, in the gaps between them.
         let desktop = egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(ui.style()).inner_margin(GAP).corner_radius(egui::CornerRadius {
+            .frame(egui::Frame::central_panel(ui.style()).inner_margin(self.gap()).corner_radius(egui::CornerRadius {
                 sw: radius,
                 se: radius,
                 ..Default::default()
@@ -881,6 +953,10 @@ impl eframe::App for App {
                     self.custom_frame = !on;
                     self.config.system_title_bar = on;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(on));
+                    self.save_config();
+                }
+                Action::Gap(gap) => {
+                    self.config.gap = gap;
                     self.save_config();
                 }
                 Action::FontSize(size) => {
@@ -997,6 +1073,7 @@ mod tests {
             hovering: None,
             tiles: Vec::new(),
             menu_at: None,
+            radius: 0,
             title_height: 34.0,
             command: None,
             requests: Requests::default(),
@@ -1198,9 +1275,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
-        let gap = app.tabs[0].tree.layout(DESKTOP, GAP, &|_| false, 34.0).1[0].rect.center();
+        let (area, spacing) = app.tile_area(&ctx, DESKTOP);
+        let gap = app.tabs[0].tree.layout(area, spacing, &|_| false, 34.0).1[0].rect.center();
         drag(&ctx, &mut app, gap, gap + vec2(-200.0, 0.0));
-        let tiles = app.tabs[0].tree.layout(DESKTOP, GAP, &|_| false, 34.0).0;
+        let tiles = app.tabs[0].tree.layout(area, spacing, &|_| false, 34.0).0;
         assert!((tiles[0].1.width() - 200.0).abs() < 1.0, "{:?}", tiles[0].1);
     }
 

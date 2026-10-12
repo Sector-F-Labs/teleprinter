@@ -222,7 +222,8 @@ impl Node {
     }
 
     /// Each pane's rectangle within `area`, with `gap` between neighbours,
-    /// and the dividers in those gaps. A collapsed pane is only `title`
+    /// and the dividers in those gaps; a negative gap overlaps neighbours
+    /// by that much, for borders they share. A collapsed pane is only `title`
     /// tall (its title bar); in a column, the open panes share what the
     /// folded ones give up. In a row, a folded pane keeps its width.
     pub fn layout(
@@ -339,6 +340,19 @@ mod tests {
 
     fn open(tree: &Node) -> Vec<(PaneId, Rect)> {
         tree.layout(area(), 4.0, &|_| false, 10.0).0
+    }
+
+    #[test]
+    fn a_negative_gap_overlaps_neighbours() {
+        let mut tree = Node::Leaf(1);
+        tree.split(1, Dir::Right, 2);
+        tree.split(2, Dir::Down, 3);
+        let (panes, dividers) = tree.layout(area(), -1.0, &|_| false, 10.0);
+        let rect = |id| panes.iter().find(|(p, _)| *p == id).unwrap().1;
+        assert_eq!(rect(1).right() - 1.0, rect(2).left(), "1 | 2 share a column of pixels");
+        assert_eq!(rect(2).bottom() - 1.0, rect(3).top());
+        assert_eq!((rect(1).left(), rect(1).right() + rect(2).width() - 1.0), (0.0, 104.0), "together they fill the area");
+        assert_eq!(dividers.len(), 2);
     }
 
     /// Two on the left (1 over 2), two on the right (3 over 4).
