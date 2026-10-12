@@ -104,6 +104,8 @@ pub struct App {
     screenshot: Option<(PathBuf, bool)>,
     /// Where programs in the panes ask for panes (ADR-0009); `None` if it couldn't start.
     control: Option<control::Server>,
+    /// The window title last sent: sending one requests a repaint, so only on a change.
+    window_title: String,
 }
 
 impl App {
@@ -140,6 +142,7 @@ impl App {
             requests: Requests { focus: true, ..Default::default() },
             screenshot: std::env::var_os("TELEPRINTER_SCREENSHOT").map(|p| (PathBuf::from(p), false)),
             control,
+            window_title: String::new(),
         };
         let first = app.spawn(&cc.egui_ctx, None, dirs::home_dir(), HashMap::new());
         app.tabs.push(Tab::new(first));
@@ -882,7 +885,10 @@ impl eframe::App for App {
             0 | 1 => self.title(self.active()),
             n => format!("{} ({n} panes)", self.title(self.active())),
         };
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if title != self.window_title {
+            self.window_title = title.clone();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
 
         let mut actions = Vec::new();
         // Taken before the panes see them: these keys don't reach the shell.
@@ -1079,6 +1085,7 @@ mod tests {
             requests: Requests::default(),
             screenshot: None,
             control: None,
+            window_title: String::new(),
         }
     }
 
