@@ -113,7 +113,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, mut config: Config) -> Self {
         patina::appearance::watch(&cc.egui_ctx);
         crate::fonts::install(&cc.egui_ctx);
-        let dirs: Vec<_> = skin::shared_dir().into_iter().collect();
+        let dirs: Vec<_> = skin::app_dir("teleprinter").into_iter().collect();
         let (skins, skin_errors) = skin::load_all(skin::BUILT_IN, &dirs);
         if let Ok(name) = std::env::var("TELEPRINTER_SKIN") {
             config.skin = Some(name); // for this run only: never saved
