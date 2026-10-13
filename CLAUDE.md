@@ -1,7 +1,8 @@
 # Teleprinter
 
 A terminal emulator in Rust on egui and [Patina](https://github.com/Sector-F-Labs/patina), with
-`alacritty_terminal` doing the emulation (ADR-0001). Private repo; origin is on urd.
+`alacritty_terminal` doing the emulation (ADR-0001). Public on GitHub (Sector-F-Labs/teleprinter);
+`origin` fetches from GitHub and pushes to both GitHub and urd, which is also the `urd` remote.
 
 Significant decisions are ADRs in `docs/adr/` (see its README, and the `adr` skill for adding
 one). Read the relevant ones before changing fonts, colours or key handling.
