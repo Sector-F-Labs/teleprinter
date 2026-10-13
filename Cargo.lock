@@ -2465,12 +2465,13 @@ dependencies = [
 
 [[package]]
 name = "patina-ui"
-version = "0.1.2"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f901c33b0402b29d8b996f308b79e268b22017e6aa5f12185150ed14998b2fdd"
+checksum = "4bf59c1de69d96e1a1033ae669a43dd562d153b7d727b98d19abff7d9f1f174b"
 dependencies = [
  "dirs",
  "egui",
+ "libc",
  "serde",
  "serde_ignored",
  "toml",

@@ -43,3 +43,8 @@ panes in one layout without tabs; tabs are for separate layouts, not more panes 
 - With the system title bar on, the desktop shows the title and the tabs sit in the toolbar.
 - Tabs can't yet be reordered, renamed, or have panes dragged between them; the socket has no
   request to open a tab.
+
+## Update 2026-10-13
+
+The strip and its keys moved into Patina as `patina::tabs` (Patina's ADR-0009), for other apps to
+use, released in patina-ui 0.1.5; Teleprinter maps its `TabAction`s onto its own.

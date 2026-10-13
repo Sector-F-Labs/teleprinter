@@ -39,7 +39,7 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_TABS=3`
 - `src/fonts.rs`: bundled MesloLGS NF (ADR-0002).
 - `src/tiles.rs`: rows and columns of weighted children (split, insert, move, close, swap, dividers,
   layout with folded panes), pure and unit-tested (ADR-0005, ADR-0008).
-- `src/app.rs`: window, Patina title bar with menus and tabs (each its own tile tree, ADR-0012),
+- `src/app.rs`: window, Patina title bar with menus and tabs (each its own tile tree, ADR-0012; the strip and its keys are `patina::tabs`),
   skins, screenshot mode; panes as pinned
   `egui::Window`s, title-bar drag handles (move, or swap after a hold; right-click for the split menu), dividers, background menu. Its tests drive drags through
   egui with shell-less panes.

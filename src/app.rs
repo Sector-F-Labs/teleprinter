@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use alacritty_terminal::event::WindowSize;
 use egui::{Id, Rect};
-use patina::frame::{self, TitleBar};
+use patina::frame::{self, FrameStyle, TitleBar};
 use patina::skin::{self, Skin};
+use patina::tabs::{self, TabAction, TabStrip};
 
 use crate::config::Config;
 use crate::control::{self, Request};
@@ -459,46 +460,11 @@ impl App {
     }
 
     /// The tabs, after the menus, each named for its active pane, then +
-    /// for a new one. They share the bar's width, up to a limit each, and
-    /// span its height (`span`, padding and all). The shown one is filled
-    /// in the panel colour, joining it to the panes below; on a bar that's
-    /// already that colour, in the extreme background colour instead.
-    fn tab_strip(&self, ui: &mut egui::Ui, span: egui::Rangef, bar: egui::Color32, actions: &mut Vec<Action>) {
-        const PLUS: f32 = 32.0;
-        let global = ui.ctx().global_style();
-        let shown = if bar == global.visuals.panel_fill { global.visuals.extreme_bg_color } else { global.visuals.panel_fill };
-        // The menus' text colour, and the panes' for the shown tab.
-        let ink = ui.visuals().widgets.inactive.text_color();
-        ui.separator();
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let n = self.tabs.len() as f32;
-        let width = ((ui.available_width() - PLUS) / n).clamp(48.0, 200.0);
-        for (i, tab) in self.tabs.iter().enumerate() {
-            let title = self.title(tab.active);
-            let (fill, ink) = if i == self.tab { (Some(shown), global.visuals.strong_text_color()) } else { (None, ink) };
-            let response = tab_shape(ui, Id::new(("tab", i)), width, span, &title, fill, ink).on_hover_text(&title);
-            // Hovered, a tab has a close button, after its own registration so it wins.
-            if ui.rect_contains_pointer(response.rect) && tab_close(ui, Id::new(("tab-close", i)), response.rect, ink) {
-                actions.push(Action::CloseTab(i));
-            } else if response.clicked() {
-                actions.push(Action::ShowTab(i));
-            }
-            if response.middle_clicked() {
-                actions.push(Action::CloseTab(i));
-            }
-            response.context_menu(|ui| {
-                if ui.button("New Tab").clicked() {
-                    actions.push(Action::NewTab);
-                    ui.close();
-                }
-                if ui.button("Close Tab").clicked() {
-                    actions.push(Action::CloseTab(i));
-                    ui.close();
-                }
-            });
-        }
-        if tab_shape(ui, Id::new("new-tab"), PLUS, span, "+", None, ink).on_hover_text("New Tab (Ctrl+Shift+T)").clicked() {
-            actions.push(Action::NewTab);
+    /// for a new one, spanning the bar's height (`span`, padding and all).
+    fn tab_strip(&self, ui: &mut egui::Ui, span: egui::Rangef, style: &FrameStyle, actions: &mut Vec<Action>) {
+        let titles: Vec<_> = self.tabs.iter().map(|tab| self.title(tab.active)).collect();
+        if let Some(action) = TabStrip::new(&titles, self.tab, style).span(span).show(ui) {
+            actions.push(action.into());
         }
     }
 
@@ -892,18 +858,7 @@ impl eframe::App for App {
 
         let mut actions = Vec::new();
         // Taken before the panes see them: these keys don't reach the shell.
-        ctx.input_mut(|i| {
-            if i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::T) {
-                actions.push(Action::NewTab);
-            }
-            let n = self.tabs.len();
-            if i.consume_key(egui::Modifiers::CTRL, egui::Key::PageUp) {
-                actions.push(Action::ShowTab((self.tab + n - 1) % n));
-            }
-            if i.consume_key(egui::Modifiers::CTRL, egui::Key::PageDown) {
-                actions.push(Action::ShowTab((self.tab + 1) % n));
-            }
-        });
+        actions.extend(tabs::keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
         let header = frame::header_frame(ui.style(), &style, radius);
         egui::Panel::top("header").frame(header).show(ui, |ui| {
             // The bar's full height, for the tabs to fill.
@@ -913,7 +868,7 @@ impl eframe::App for App {
                 ui,
                 |ui| {
                     self.menus(ui, &mut actions, &problems);
-                    self.tab_strip(ui, span, style.title_bar, &mut actions);
+                    self.tab_strip(ui, span, &style, &mut actions);
                 },
                 // A terminal's output is the shell's; nothing goes on the right.
                 |_ui| {},
@@ -999,40 +954,14 @@ impl eframe::App for App {
     }
 }
 
-/// The side of a tab's close button.
-const TAB_CLOSE: f32 = 18.0;
-
-/// A tab in the title bar: `width` wide in the row, `span` tall, square
-/// whatever the skin's rounding, filled with `fill`, else when hovered.
-/// A tab wide enough for a close button keeps its text clear of one.
-fn tab_shape(ui: &mut egui::Ui, id: Id, width: f32, span: egui::Rangef, text: &str, fill: Option<egui::Color32>, ink: egui::Color32) -> egui::Response {
-    let (row, _) = ui.allocate_exact_size(egui::vec2(width, ui.spacing().interact_size.y), egui::Sense::hover());
-    let rect = Rect::from_x_y_ranges(row.x_range(), span);
-    let response = ui.interact(rect, id, egui::Sense::click());
-    let painter = ui.painter().with_clip_rect(rect);
-    // The pointer, not `hovered`: over the close button the tab isn't hovered, but is still lit.
-    if let Some(fill) = fill.or_else(|| ui.rect_contains_pointer(rect).then(|| ui.visuals().widgets.hovered.weak_bg_fill)) {
-        painter.rect_filled(rect, 0.0, fill);
+impl From<TabAction> for Action {
+    fn from(action: TabAction) -> Self {
+        match action {
+            TabAction::New => Action::NewTab,
+            TabAction::Show(tab) => Action::ShowTab(tab),
+            TabAction::Close(tab) => Action::CloseTab(tab),
+        }
     }
-    let room = if width > 4.0 * TAB_CLOSE { width - 2.0 * TAB_CLOSE - 8.0 } else { width - 16.0 };
-    // Coloured here: the bar's override colour would win over the painter's.
-    let galley = egui::WidgetText::from(egui::RichText::new(text).color(ink)).into_galley(ui, Some(egui::TextWrapMode::Truncate), room, egui::TextStyle::Body);
-    painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
-    response
-}
-
-/// A tab's close button, a cross at its right end; whether it was clicked.
-fn tab_close(ui: &mut egui::Ui, id: Id, tab: Rect, ink: egui::Color32) -> bool {
-    let rect = Rect::from_center_size(egui::pos2(tab.right() - 6.0 - TAB_CLOSE / 2.0, tab.center().y), egui::Vec2::splat(TAB_CLOSE));
-    let response = ui.interact(rect, id, egui::Sense::click()).on_hover_text("Close Tab");
-    if response.hovered() {
-        ui.painter().rect_filled(rect, 0.0, ui.visuals().widgets.active.weak_bg_fill);
-    }
-    let (c, d) = (rect.center(), 4.0);
-    let stroke = egui::Stroke::new(1.2, ink);
-    ui.painter().line_segment([c + egui::vec2(-d, -d), c + egui::vec2(d, d)], stroke);
-    ui.painter().line_segment([c + egui::vec2(-d, d), c + egui::vec2(d, -d)], stroke);
-    response.clicked()
 }
 
 /// Whether a pane's window is collapsed, as its arrow left it: egui keeps
@@ -1369,10 +1298,15 @@ mod tests {
             let header = frame::header_frame(ui.style(), &style, 0);
             egui::Panel::top("header").frame(header).show(ui, |ui| {
                 let span = (ui.max_rect() + header.inner_margin).y_range();
-                TitleBar::new("", &style).menu_bar(true).show(ui, |ui| app.tab_strip(ui, span, style.title_bar, &mut actions), |_| {});
+                TitleBar::new("", &style).menu_bar(true).show(ui, |ui| app.tab_strip(ui, span, &style, &mut actions), |_| {});
             });
         });
         actions
+    }
+
+    /// Tab `i`'s id in Patina's strip, and its cross's.
+    fn tab_ids(i: usize) -> (Id, Id) {
+        TabStrip::new(&[""], 0, &FrameStyle::from_visuals(&egui::Visuals::dark())).tab_id(i)
     }
 
     #[test]
@@ -1380,7 +1314,7 @@ mod tests {
         let ctx = egui::Context::default();
         let app = two_tabs();
         header_frame(&ctx, &app, vec![]);
-        let first = ctx.read_response(Id::new(("tab", 0))).unwrap().rect;
+        let first = ctx.read_response(tab_ids(0).0).unwrap().rect;
         assert_eq!(first.top(), 0.0, "the tab starts at the window's top edge");
         let at = pos2(first.center().x, 2.0);
         header_frame(&ctx, &app, vec![Event::PointerMoved(at)]);
@@ -1394,9 +1328,9 @@ mod tests {
         let ctx = egui::Context::default();
         let app = two_tabs();
         header_frame(&ctx, &app, vec![]);
-        let tab = ctx.read_response(Id::new(("tab", 0))).unwrap().rect;
+        let tab = ctx.read_response(tab_ids(0).0).unwrap().rect;
         header_frame(&ctx, &app, vec![Event::PointerMoved(tab.center())]);
-        let cross = ctx.read_response(Id::new(("tab-close", 0))).expect("hovered, the tab has a cross").rect;
+        let cross = ctx.read_response(tab_ids(0).1).expect("hovered, the tab has a cross").rect;
         let at = cross.center();
         header_frame(&ctx, &app, vec![Event::PointerMoved(at)]);
         header_frame(&ctx, &app, vec![button(at, true)]);
