@@ -113,6 +113,8 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, mut config: Config) -> Self {
         patina::appearance::watch(&cc.egui_ctx);
         crate::fonts::install(&cc.egui_ctx);
+        // Disable egui's default Ctrl+Q (Cmd+Q on Mac) quit shortcut
+        cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
         let dirs: Vec<_> = skin::app_dir("teleprinter").into_iter().collect();
         let (skins, skin_errors) = skin::load_all(skin::BUILT_IN, &dirs);
         if let Ok(name) = std::env::var("TELEPRINTER_SKIN") {
