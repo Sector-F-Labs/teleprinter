@@ -859,6 +859,7 @@ impl eframe::App for App {
         let mut actions = Vec::new();
         // Taken before the panes see them: these keys don't reach the shell.
         actions.extend(tabs::keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
+        actions.extend(tab_number(&ctx, self.tabs.len()).map(Action::ShowTab));
         let header = frame::header_frame(ui.style(), &style, radius);
         egui::Panel::top("header").frame(header).show(ui, |ui| {
             // The bar's full height, for the tabs to fill.
@@ -962,6 +963,22 @@ impl From<TabAction> for Action {
             TabAction::Close(tab) => Action::CloseTab(tab),
         }
     }
+}
+
+/// Alt+1 to Alt+9 show that tab, as in GNOME Terminal. Taken, with the digit
+/// egui sends after it as text, only when there is such a tab, so readline's
+/// Alt+digit still works past the last one.
+fn tab_number(ctx: &egui::Context, count: usize) -> Option<usize> {
+    const DIGITS: [egui::Key; 9] = {
+        use egui::Key::*;
+        [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9]
+    };
+    ctx.input_mut(|i| {
+        let n = DIGITS.iter().take(count).position(|&key| i.consume_key(egui::Modifiers::ALT, key))?;
+        let digit = (n + 1).to_string();
+        i.events.retain(|e| !matches!(e, egui::Event::Text(t) if *t == digit));
+        Some(n)
+    })
 }
 
 /// Whether a pane's window is collapsed, as its arrow left it: egui keeps
@@ -1283,6 +1300,25 @@ mod tests {
         let list = app.answer(&ctx, Request::List);
         let tabs: Vec<_> = list["panes"].as_array().unwrap().iter().map(|p| p["tab"].as_u64().unwrap()).collect();
         assert_eq!(tabs, [1, 1, 2]);
+    }
+
+    #[test]
+    fn alt_and_a_number_shows_that_tab_and_the_digit_never_reaches_the_shell() {
+        let alt = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+        let ctx = egui::Context::default();
+        let taken = |events: Vec<Event>| {
+            let mut out = (None, vec![]);
+            let _ = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+                out = (tab_number(ui.ctx(), 2), ui.input(|i| i.events.clone()));
+            });
+            out
+        };
+        let (tab, left) = taken(vec![alt(egui::Key::Num2), Event::Text("2".into())]);
+        assert_eq!(tab, Some(1));
+        assert!(left.is_empty(), "{left:?}");
+        // No third tab: Alt+3 goes to the shell, for readline.
+        let (tab, left) = taken(vec![alt(egui::Key::Num3), Event::Text("3".into())]);
+        assert_eq!((tab, left.len()), (None, 2));
     }
 
     /// One frame of just the title bar, as `ui` draws it; the actions it asked for.

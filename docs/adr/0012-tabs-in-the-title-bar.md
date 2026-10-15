@@ -48,3 +48,10 @@ panes in one layout without tabs; tabs are for separate layouts, not more panes 
 
 The strip and its keys moved into Patina as `patina::tabs` (Patina's ADR-0009), for other apps to
 use, released in patina-ui 0.1.5; Teleprinter maps its `TabAction`s onto its own.
+
+## Update 2026-10-15
+
+Alt+1 to Alt+9 show that tab, as in GNOME Terminal. They're Teleprinter's own, beside
+`patina::tabs::keys`, until another app wants them. A key is taken, along with the digit egui sends
+after it as text, only when that tab exists, so readline's Alt+digit (a numeric argument) still
+works past the last tab, and in a window with one tab every key except Alt+1 does.
