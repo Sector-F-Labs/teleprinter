@@ -12,7 +12,7 @@ SCRATCH_ENV := XDG_CONFIG_HOME=$(CURDIR)/target/scratch-config XDG_DATA_HOME=$(C
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run dev build test check screenshot icons install uninstall clean
+.PHONY: help run dev build test check screenshot icons install uninstall clean icon
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -45,6 +45,9 @@ screenshot: ## Regenerate docs/screenshot-*.png in a throwaway config dir
 
 icons: ## Render assets/teleprinter-icon-128.png from packaging/linux/teleprinter.svg
 	cargo run -q --example render_icon -- 128 assets/teleprinter-icon-128.png
+
+icon: ## docs/icon.png: the app icon at 120 px, for the README
+	scripts/icon.sh
 
 # For the current user; no sudo. The launcher's Exec gets the absolute path,
 # so it works even if $(BINDIR) isn't on the GNOME session's PATH. On
