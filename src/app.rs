@@ -20,6 +20,8 @@ use crate::view::{self, Requests, ViewState};
 
 /// The skin used until the user picks one: stock egui, following the desktop.
 const HOME_SKIN: &str = "Default";
+/// The app's name for its config folder, and so its skins folder.
+const APP: &str = "teleprinter";
 
 const MIN_FONT: f32 = 8.0;
 const MAX_FONT: f32 = 32.0;
@@ -41,6 +43,10 @@ const SWAP_AFTER: f64 = 0.6;
 enum Action {
     Quit,
     SetSkin(String),
+    SetLightDark(String),
+    ReloadSkins,
+    CopySkins,
+    OpenSkinsFolder,
     SystemTitleBar(bool),
     FontSize(f32),
     Gap(f32),
@@ -79,6 +85,8 @@ pub struct App {
     custom_frame: bool,
     skins: Vec<Skin>,
     skin_errors: Vec<String>,
+    /// The latest message for the status bar.
+    status: Option<Status>,
     /// Every tab's panes.
     panes: HashMap<PaneId, Pane>,
     /// Never empty: closing the last tab closes the window.
@@ -115,8 +123,7 @@ impl App {
         crate::fonts::install(&cc.egui_ctx);
         // Disable egui's default Ctrl+Q (Cmd+Q on Mac) quit shortcut
         cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
-        let dirs: Vec<_> = skin::app_dir("teleprinter").into_iter().collect();
-        let (skins, skin_errors) = skin::load_all(skin::BUILT_IN, &dirs);
+        let (skins, skin_errors) = load_skins();
         if let Ok(name) = std::env::var("TELEPRINTER_SKIN") {
             config.skin = Some(name); // for this run only: never saved
         }
@@ -131,6 +138,7 @@ impl App {
             config,
             skins,
             skin_errors,
+            status: None,
             panes: HashMap::new(),
             tabs: Vec::new(),
             tab: 0,
@@ -170,7 +178,7 @@ impl App {
                 set_collapsed(&cc.egui_ctx, id, true);
             }
         }
-        app.skin().apply(&cc.egui_ctx);
+        app.apply_skin(&cc.egui_ctx);
         app
     }
 
@@ -369,6 +377,14 @@ impl App {
         find(self.config.skin.as_deref().unwrap_or(HOME_SKIN)).or_else(|| find(HOME_SKIN)).unwrap_or(&self.skins[0])
     }
 
+    fn apply_skin(&self, ctx: &egui::Context) {
+        let skin = self.skin();
+        skin.apply(ctx);
+        if skin.follows_desktop() {
+            ctx.set_theme(self.config.theme());
+        }
+    }
+
     /// The space between panes and around them, as the config sets it.
     fn gap(&self) -> f32 {
         self.config.gap.clamp(0.0, MAX_GAP)
@@ -388,7 +404,7 @@ impl App {
     }
 
     /// Left side of the title bar: word menus (Patina's ADR-0006).
-    fn menus(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>, problems: &[String]) {
+    fn menus(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.menu_button("File", |ui| {
             if ui.button("Split Right").clicked() {
                 actions.push(Action::Split(Dir::Right));
@@ -448,15 +464,92 @@ impl App {
                 actions.push(Action::SystemTitleBar(system));
             }
         });
+        // Patina's skin menu (its ADR-0017): only controls; what they did goes to the status bar.
         ui.menu_button("Skins", |ui| {
-            let current = self.skin().name.clone();
+            // Size the menu to its widest entry instead of wrapping entries to its first width.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            let current = self.skin();
             for skin in &self.skins {
-                if ui.radio(skin.name == current, &skin.name).clicked() {
+                let label = match &skin.author {
+                    Some(author) if skin.path.is_some() => format!("{} — {author}", skin.name),
+                    _ => skin.name.clone(),
+                };
+                let resp = ui.radio(skin.name == current.name, label);
+                let resp = match &skin.path {
+                    Some(path) => resp.on_hover_text(path.display().to_string()),
+                    None => resp,
+                };
+                if resp.clicked() {
                     actions.push(Action::SetSkin(skin.name.clone()));
                 }
             }
-            for error in self.skin_errors.iter().chain(problems) {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+            ui.separator();
+            ui.add_enabled_ui(current.follows_desktop(), |ui| {
+                for (value, label) in [("system", "Follow desktop"), ("light", "Light"), ("dark", "Dark")] {
+                    // An unset or unknown setting follows the desktop.
+                    let on = match value {
+                        "system" => !matches!(self.config.light_dark.as_str(), "light" | "dark"),
+                        _ => self.config.light_dark == value,
+                    };
+                    if ui.radio(on, label).clicked() {
+                        actions.push(Action::SetLightDark(value.into()));
+                    }
+                }
+            });
+            ui.separator();
+            if ui.button("Reload skins").clicked() {
+                actions.push(Action::ReloadSkins);
+            }
+            if ui
+                .button("Copy built-in skins to folder")
+                .on_hover_text("Puts editable copies in the skins folder; never overwrites existing files")
+                .clicked()
+            {
+                actions.push(Action::CopySkins);
+            }
+            let folder = skin::app_dir(APP).map(|d| d.display().to_string()).unwrap_or_default();
+            if ui.button("Open skins folder").on_hover_text(folder).clicked() {
+                actions.push(Action::OpenSkinsFolder);
+            }
+        });
+    }
+
+    /// Rescans the built-in and user skins; the config keeps the one in use by name.
+    fn reload_skins(&mut self, ctx: &egui::Context) {
+        (self.skins, self.skin_errors) = load_skins();
+        self.apply_skin(ctx);
+    }
+
+    /// The version on the left, then the latest message, coloured by its level. Skins that failed
+    /// to load, and colours the skin gets wrong (`problems`, which have fallbacks, so they warn),
+    /// stay there, ahead of newer messages, until they're fixed.
+    fn status_bar(&self, ui: &mut egui::Ui, problems: &[String]) {
+        ui.horizontal(|ui| {
+            // Just the version: the app's name is already in the title bar and the window list,
+            // so repeating it here adds nothing.
+            ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).weak().small());
+            let plural = |n: usize| if n == 1 { "" } else { "s" };
+            let lasting = if !self.skin_errors.is_empty() {
+                let n = self.skin_errors.len();
+                Some((Status::error(format!("Couldn't load {n} skin{}", plural(n))), self.skin_errors.join("\n")))
+            } else if !problems.is_empty() {
+                let n = problems.len();
+                Some((Status::warn(format!("{n} problem{} in this skin's colours", plural(n))), problems.join("\n")))
+            } else {
+                None
+            };
+            let shown = lasting.as_ref().map(|(s, _)| s).or(self.status.as_ref());
+            if let Some(status) = shown {
+                ui.separator();
+                let color = match status.level {
+                    Level::Error => ui.visuals().error_fg_color,
+                    Level::Warn => ui.visuals().warn_fg_color,
+                    Level::Info => ui.visuals().weak_text_color(),
+                };
+                let resp = ui.label(egui::RichText::new(&status.text).color(color).small());
+                if let Some((_, details)) = &lasting {
+                    resp.on_hover_text(details);
+                }
             }
         });
     }
@@ -870,7 +963,7 @@ impl eframe::App for App {
             TitleBar::new("", &style).custom(self.custom_frame).menu_bar(true).show(
                 ui,
                 |ui| {
-                    self.menus(ui, &mut actions, &problems);
+                    self.menus(ui, &mut actions);
                     self.tab_strip(ui, span, &style, &mut actions);
                 },
                 // A terminal's output is the shell's; nothing goes on the right.
@@ -879,12 +972,17 @@ impl eframe::App for App {
         });
 
         // The tiles sit on the window's own panel colour, in the gaps between them.
+        // Patina's status bar (its ADR-0016), holding both bottom corners.
+        egui::Panel::bottom("status")
+            .frame(
+                egui::Frame::side_top_panel(ui.style())
+                    .inner_margin(egui::Margin::symmetric(10, 4))
+                    .corner_radius(egui::CornerRadius { sw: radius, se: radius, ..Default::default() }),
+            )
+            .show(ui, |ui| self.status_bar(ui, &problems));
+
         let desktop = egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(ui.style()).inner_margin(self.gap()).corner_radius(egui::CornerRadius {
-                sw: radius,
-                se: radius,
-                ..Default::default()
-            }))
+            .frame(egui::Frame::central_panel(ui.style()).inner_margin(self.gap()))
             .show(ui, |ui| {
                 // The background between and below the tiles: right-click for a new pane.
                 let rect = ui.max_rect();
@@ -910,8 +1008,34 @@ impl eframe::App for App {
                 Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 Action::SetSkin(name) => {
                     self.config.skin = Some(name);
-                    self.skin().apply(&ctx);
+                    self.apply_skin(&ctx);
                     self.save_config();
+                }
+                Action::SetLightDark(value) => {
+                    self.config.light_dark = value;
+                    self.apply_skin(&ctx);
+                    self.save_config();
+                }
+                Action::ReloadSkins => self.reload_skins(&ctx),
+                Action::CopySkins => {
+                    let copied = skin::app_dir(APP)
+                        .ok_or_else(|| "no config folder".to_string())
+                        .and_then(|dir| skin::export_built_ins(&dir, skin::BUILT_IN));
+                    self.status = Some(match copied {
+                        Ok(export) => {
+                            // The copies share the built-ins' names, so after a reload they're
+                            // the versions in use.
+                            self.reload_skins(&ctx);
+                            Status::info(export_summary(&export.copied, &export.skipped))
+                        }
+                        Err(e) => Status::error(format!("Couldn't copy skins: {e}")),
+                    });
+                }
+                Action::OpenSkinsFolder => {
+                    if let Some(dir) = skin::app_dir(APP) {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let _ = patina::open::path(&dir);
+                    }
                 }
                 Action::SystemTitleBar(on) => {
                     self.custom_frame = !on;
@@ -999,6 +1123,49 @@ fn pane_id(id: PaneId) -> Id {
     Id::new(("pane", id))
 }
 
+/// Patina's built-in skins and Teleprinter's own folder.
+fn load_skins() -> (Vec<Skin>, Vec<String>) {
+    skin::load_all(skin::BUILT_IN, &skin::app_dir(APP).into_iter().collect::<Vec<_>>())
+}
+
+/// A message for the status bar.
+struct Status {
+    level: Level,
+    text: String,
+}
+
+enum Level {
+    Error,
+    Warn,
+    Info,
+}
+
+impl Status {
+    fn error(text: impl Into<String>) -> Self {
+        Status { level: Level::Error, text: text.into() }
+    }
+
+    fn warn(text: impl Into<String>) -> Self {
+        Status { level: Level::Warn, text: text.into() }
+    }
+
+    fn info(text: impl Into<String>) -> Self {
+        Status { level: Level::Info, text: text.into() }
+    }
+}
+
+/// What Copy built-in skins did, for the status bar.
+fn export_summary(copied: &[String], skipped: &[String]) -> String {
+    let mut parts = Vec::new();
+    if !copied.is_empty() {
+        parts.push(format!("Copied {}", copied.join(", ")));
+    }
+    if !skipped.is_empty() {
+        parts.push(format!("kept your existing {}", skipped.join(", ")));
+    }
+    parts.join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1019,6 +1186,7 @@ mod tests {
             custom_frame: true,
             skins,
             skin_errors: Vec::new(),
+            status: None,
             panes: HashMap::from([(1, pane()), (2, pane())]),
             tabs: vec![Tab { tree, active: 1 }],
             tab: 0,

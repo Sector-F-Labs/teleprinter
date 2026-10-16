@@ -50,7 +50,7 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_TABS=3`
   `packaging/claude/teleprinter-panes/` is the Claude Code skill that uses it (nvim code tours);
   symlink it into `~/.claude/skills/`. `packaging/claude/tfork/` (`/tfork`) forks a Claude
   session into a pane.
-- `src/config.rs`: `~/.config/teleprinter/config.toml` (skin, system title bar, font size, gap between panes,
+- `src/config.rs`: `~/.config/teleprinter/config.toml` (skin, light/dark, system title bar, font size, gap between panes,
   pane title bar height).
 
 ## Gotchas
