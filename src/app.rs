@@ -102,8 +102,6 @@ pub struct App {
     title_height: f32,
     /// Where each pane of the shown tab was last laid out, for placing a new one in empty space.
     tiles: Vec<(PaneId, Rect)>,
-    /// The window's corner radius this frame (0 maximised), for panes in its bottom corners.
-    radius: u8,
     /// Where the background was right-clicked, for its menu.
     menu_at: Option<egui::Pos2>,
     /// `TELEPRINTER_COMMAND`, run in every pane instead of the login shell.
@@ -147,7 +145,6 @@ impl App {
             hovering: None,
             tiles: Vec::new(),
             menu_at: None,
-            radius: 0,
             title_height: 34.0,
             command,
             requests: Requests { focus: true, ..Default::default() },
@@ -851,28 +848,20 @@ impl App {
         {
             self.activate(open);
         }
-        // Touching, panes are square, but for the window's own rounded bottom corners.
-        let gap = self.gap();
-        let rounded = egui::Frame::window(&ctx.global_style()).corner_radius;
+        // Touching, panes are square: the status bar below holds the window's rounded bottom
+        // corners.
+        let corners = if self.gap() > 0.0 {
+            egui::Frame::window(&ctx.global_style()).corner_radius
+        } else {
+            egui::CornerRadius::ZERO
+        };
         for (id, rect) in &tiles {
-            let corners = if gap > 0.0 {
-                rounded
-            } else {
-                let touch = |a: f32, b: f32| (a - b).abs() < 0.5;
-                let bottom = touch(rect.bottom(), area.bottom());
-                let corner = |side: f32, edge: f32| if bottom && touch(side, edge) { self.radius } else { 0 };
-                egui::CornerRadius {
-                    sw: corner(rect.left(), area.left()),
-                    se: corner(rect.right(), area.right()),
-                    ..Default::default()
-                }
-            };
             if let Some((strip, layer)) = self.show_pane(ctx, *id, *rect, corners, palette, actions) {
                 self.drag_handle(ctx, *id, strip, layer, actions);
             }
         }
         // Overlapping, the active pane is drawn last, so its accent border is whole.
-        if gap == 0.0 {
+        if self.gap() == 0.0 {
             ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, pane_id(self.active())));
         }
         for divider in &dividers {
@@ -923,7 +912,6 @@ impl eframe::App for App {
         let style = self.skin().frame_style(ui.visuals());
         let (palette, problems) = Palette::new(self.skin(), ui.visuals());
         let radius = if self.custom_frame { frame::corner_radius(&ctx, style.radius) } else { 0 };
-        self.radius = radius;
 
         self.answer_calls(&ctx);
         let mut exited = Vec::new();
@@ -1195,7 +1183,6 @@ mod tests {
             hovering: None,
             tiles: Vec::new(),
             menu_at: None,
-            radius: 0,
             title_height: 34.0,
             command: None,
             requests: Requests::default(),
