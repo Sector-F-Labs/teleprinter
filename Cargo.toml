@@ -13,7 +13,7 @@ eframe = "0.35"
 egui = "0.35"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2.190"
-patina-ui = "0.1.7"
+patina-ui = { git = "https://github.com/Sector-F-Labs/patina", branch = "develop" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 toml = "1.1.8"

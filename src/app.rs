@@ -1066,6 +1066,7 @@ impl eframe::App for App {
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         frame::release_grab(ctx, raw_input);
+        patina::kinetic::glide(ctx, raw_input);
     }
 }
 
