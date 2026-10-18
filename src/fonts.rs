@@ -1,6 +1,7 @@
 //! MesloLGS NF, bundled (ADR-0002): the terminal grid's regular, bold,
 //! italic and bold-italic faces, with egui's own fonts behind them as
-//! fallback for anything Meslo lacks (emoji, mostly).
+//! fallback for anything Meslo lacks. Colour emoji are painted apart from
+//! text, by `emoji` (ADR-0013).
 
 use std::sync::Arc;
 

@@ -54,6 +54,7 @@ mechanics of adding one.
 | [0010](0010-report-the-wheel-to-programs-that-ask-for-the-mouse.md) | Report the wheel to programs that ask for the mouse; Shift keeps it local | Accepted, partly superseded by [0011](0011-report-clicks-and-drags-shift-selects.md) |
 | [0011](0011-report-clicks-and-drags-shift-selects.md) | Report clicks and drags to programs that ask for the mouse; Shift selects | Accepted |
 | [0012](0012-tabs-in-the-title-bar.md) | Tabs in the title bar, in place of the window title | Proposed |
+| [0013](0013-colour-emoji-from-bundled-noto.md) | Colour emoji from a bundled Noto Color Emoji, painted as images | Accepted |
 
 ## Decision Relationship
 
@@ -72,6 +73,7 @@ flowchart TD
     J -.superseded in part by.-> K[0011: clicks and drags too; Shift selects]
     F --> L[0012: tabs in the title bar]
     G --> L
+    B --> M[0013: colour emoji from bundled Noto]
 ```
 
 ## Revisit Triggers

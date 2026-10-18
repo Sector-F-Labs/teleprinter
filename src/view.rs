@@ -3,14 +3,16 @@
 //! active palette, so skins reach every cell (ADR-0003).
 
 use alacritty_terminal::event::WindowSize;
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::{Dimensions, Indexed, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use egui::{Color32, Event, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use ttf_parser::GlyphId;
 
+use crate::emoji;
 use crate::fonts;
 use crate::palette::{self, Palette};
 use crate::session::Session;
@@ -441,9 +443,13 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
         italic: bool,
     }
     let mut runs: Vec<Run> = Vec::new();
+    let mut emojis: Vec<(GlyphId, Rect)> = Vec::new();
     let mut last: Option<Point> = None;
+    // Cells before this index are the tail of an emoji sequence already placed.
+    let mut emoji_until = 0;
+    let cells: Vec<Indexed<&Cell>> = content.display_iter.collect();
 
-    for indexed in content.display_iter {
+    for (i, indexed) in cells.iter().enumerate() {
         let point = indexed.point;
         let c = &indexed.cell;
         if c.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
@@ -481,7 +487,16 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
         if c.flags.contains(Flags::STRIKEOUT) {
             painter.hline(cell_rect.x_range(), cell_rect.center().y, Stroke::new(1.0, fg));
         }
-        if c.c == ' ' && c.zerowidth().is_none() {
+        if (c.c == ' ' && c.zerowidth().is_none()) || i < emoji_until {
+            last = None;
+            continue;
+        }
+        if emoji::wants(c.c, width > 1.0, c.zerowidth().unwrap_or_default())
+            && let Some((glyph, end, span)) = emoji_at(&cells, i)
+        {
+            // Two cells at most: a ZWJ family is six cells to the shell, but one picture.
+            emojis.push((glyph, Rect::from_min_size(pos, vec2(cell.x * span.min(2.0), cell.y))));
+            emoji_until = end;
             last = None;
             continue;
         }
@@ -507,6 +522,9 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
     for run in runs {
         painter.text(run.start, egui::Align2::LEFT_TOP, run.text, fonts::font(font_size, run.bold, run.italic), run.color);
     }
+    for (glyph, rect) in emojis {
+        emoji::paint(painter, glyph, rect);
+    }
 
     // Other cursor shapes, and the hollow block of an unfocused window.
     let rect = Rect::from_min_size(at(cursor.point), cell);
@@ -525,6 +543,37 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
         CursorShape::Underline => {
             painter.rect_filled(Rect::from_min_max(pos2(rect.left(), rect.bottom() - 2.0), rect.max), 0.0, palette.cursor);
         }
+    }
+}
+
+/// The emoji starting at `cells[i]`, with the cells it runs over: alacritty puts each part of
+/// a ZWJ sequence, skin tone or flag in its own cell. The glyph, the index after its last
+/// cell, and its width in cells. Falls back to the first cell alone if the whole isn't known.
+fn emoji_at(cells: &[Indexed<&Cell>], i: usize) -> Option<(GlyphId, usize, f32)> {
+    let text_of = |c: &Cell| std::iter::once(c.c).chain(c.zerowidth().into_iter().flatten().copied()).collect::<String>();
+    let width_of = |c: &Cell| if c.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+    let first = &cells[i];
+    let mut text = text_of(first.cell);
+    let (mut end, mut span) = (i + 1, width_of(first.cell));
+    let mut j = end;
+    while let Some(next) = cells.get(j) {
+        if next.cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            j += 1;
+            continue;
+        }
+        let adjacent = next.point.line == first.point.line && next.point.column.0 == first.point.column.0 + span;
+        if !adjacent || !emoji::continues(&text, next.cell.c) {
+            break;
+        }
+        text.push_str(&text_of(next.cell));
+        span += width_of(next.cell);
+        j += 1;
+        end = j;
+    }
+    match emoji::glyph(&text) {
+        Some(glyph) => Some((glyph, end, span as f32)),
+        None if end > i + 1 => emoji::glyph(&text_of(first.cell)).map(|g| (g, i + 1, width_of(first.cell) as f32)),
+        None => None,
     }
 }
 

@@ -4,6 +4,7 @@
 mod app;
 mod config;
 mod control;
+mod emoji;
 mod fonts;
 mod palette;
 mod screenshot;

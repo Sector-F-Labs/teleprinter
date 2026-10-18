@@ -3327,6 +3327,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "ttf-parser",
 ]
 
 [[package]]
