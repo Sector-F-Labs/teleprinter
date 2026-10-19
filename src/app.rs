@@ -406,11 +406,11 @@ impl App {
     /// Left side of the title bar: word menus (Patina's ADR-0006).
     fn menus(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.menu_button("File", |ui| {
-            if ui.button("Split Right").clicked() {
+            if ui.add(egui::Button::new("Split Right").shortcut_text("Ctrl+Shift+D")).clicked() {
                 actions.push(Action::Split(Dir::Right));
                 ui.close();
             }
-            if ui.button("Split Down").clicked() {
+            if ui.add(egui::Button::new("Split Down").shortcut_text("Ctrl+Shift+E")).clicked() {
                 actions.push(Action::Split(Dir::Down));
                 ui.close();
             }
@@ -946,6 +946,7 @@ impl eframe::App for App {
         // Taken before the panes see them: these keys don't reach the shell.
         actions.extend(tabs::terminal_keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
         actions.extend(tab_number(&ctx, self.tabs.len()).map(Action::ShowTab));
+        actions.extend(split_key(&ctx).map(Action::Split));
         let header = frame::header_frame(ui.style(), &style, radius);
         egui::Panel::top("header").frame(header).show(ui, |ui| {
             // The bar's full height, for the tabs to fill.
@@ -1086,6 +1087,27 @@ impl From<TabAction> for Action {
 /// Alt+1 to Alt+9 show that tab, as in GNOME Terminal. Taken, with the digit
 /// egui sends after it as text, only when there is such a tab, so readline's
 /// Alt+digit still works past the last one.
+/// Ctrl+Shift+D splits the active pane to the right, Ctrl+Shift+E below,
+/// as Cmd+D does in iTerm; on the Patina desktop that's Super+D and Super+E.
+/// Taken before the shell, which would read Ctrl+Shift+D as Ctrl+D, the
+/// end of its input.
+fn split_key(ctx: &egui::Context) -> Option<Dir> {
+    let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+    ctx.input_mut(|i| {
+        let mut split = None;
+        for (key, dir) in [(egui::Key::D, Dir::Right), (egui::Key::E, Dir::Down)] {
+            let before = i.events.len();
+            i.events.retain(|e| {
+                !matches!(e, egui::Event::Key { key: k, pressed: true, modifiers: m, .. } if *k == key && m.matches_exact(keys))
+            });
+            if i.events.len() != before {
+                split = Some(dir);
+            }
+        }
+        split
+    })
+}
+
 fn tab_number(ctx: &egui::Context, count: usize) -> Option<usize> {
     const DIGITS: [egui::Key; 9] = {
         use egui::Key::*;
@@ -1225,6 +1247,29 @@ mod tests {
     /// Where each pane's window is, as egui last placed it.
     fn window_rect(ctx: &egui::Context, id: PaneId) -> Rect {
         ctx.memory(|m| m.area_rect(pane_id(id))).unwrap()
+    }
+
+    #[test]
+    fn ctrl_shift_d_and_e_split_and_never_reach_the_shell() {
+        let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+        for (events, want) in [
+            (vec![key(egui::Key::D, keys)], Some(Dir::Right)),
+            (vec![key(egui::Key::E, keys)], Some(Dir::Down)),
+            // Plain Ctrl+D is the shell's end of input.
+            (vec![key(egui::Key::D, egui::Modifiers::CTRL)], None),
+        ] {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput { events, ..Default::default() };
+            let mut got = None;
+            let mut left = 0;
+            let _ = ctx.run_ui(input, |ui| {
+                got = split_key(ui.ctx());
+                left = ui.input(|i| i.events.len());
+            });
+            assert_eq!(got, want);
+            assert_eq!(left, usize::from(want.is_none()), "a split key is taken");
+        }
     }
 
     #[test]

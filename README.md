@@ -38,6 +38,7 @@ comes from the skin's own colours and a light or dark Tango palette.
 | Ctrl+Shift+V | Paste |
 | Shift+Page Up / Down | Scroll back through history |
 | Mouse drag / double / triple click | Select text / a word / lines |
+| Ctrl+Shift+D / Ctrl+Shift+E | Split the pane right / down, as Cmd+D does in iTerm |
 | Right-click → Split Right / Split Down | Split the pane (also on its title bar, and in File) |
 | Drag a pane's title bar onto another | Move it to that side of the other pane |
 | …and hold still before letting go | Swap the two panes |
@@ -56,8 +57,10 @@ was started, so a file manager's "Open Terminal Here" opens in that folder. `-e 
 runs a program in the first pane instead of your shell, as launchers do for apps that run in a
 terminal. On the Patina desktop it's the terminal apps open (`$TERMINAL`).
 
-On the Patina desktop, Super+T and Super+W open and close tabs, as Cmd does on a Mac: the
-compositor sends a terminal Ctrl+Shift with the key.
+On the Patina desktop, Super+T and Super+W open and close tabs, and Super+D and Super+E split, as
+Cmd does on a Mac: the compositor sends a terminal Ctrl+Shift with the key. (Super+Shift+D
+arrives as the same keys as Super+D, so splitting down is Super+E rather than iTerm's
+Cmd+Shift+D.)
 
 ## Build
 
@@ -73,7 +76,7 @@ make icons      # re-render assets/teleprinter-icon-128.png from packaging/linux
 
 ## Status
 
-A first prototype. Not yet: keyboard shortcuts for splitting and moving between panes, saving the
+A first prototype. Not yet: keyboard shortcuts for moving between panes, saving the
 layout, reordering tabs or moving panes between them, input methods, choosing a font, fonts for
 CJK and other scripts Meslo lacks.
 
