@@ -410,7 +410,7 @@ impl App {
                 actions.push(Action::Split(Dir::Right));
                 ui.close();
             }
-            if ui.add(egui::Button::new("Split Down").shortcut_text("Ctrl+Shift+E")).clicked() {
+            if ui.add(egui::Button::new("Split Down").shortcut_text("Ctrl+Alt+Shift+D")).clicked() {
                 actions.push(Action::Split(Dir::Down));
                 ui.close();
             }
@@ -1087,18 +1087,20 @@ impl From<TabAction> for Action {
 /// Alt+1 to Alt+9 show that tab, as in GNOME Terminal. Taken, with the digit
 /// egui sends after it as text, only when there is such a tab, so readline's
 /// Alt+digit still works past the last one.
-/// Ctrl+Shift+D splits the active pane to the right, Ctrl+Shift+E below,
-/// as Cmd+D does in iTerm; on the Patina desktop that's Super+D and Super+E.
-/// Taken before the shell, which would read Ctrl+Shift+D as Ctrl+D, the
+/// Ctrl+Shift+D splits the active pane to the right, Ctrl+Alt+Shift+D
+/// below, as Cmd+D and Cmd+Shift+D do in iTerm; on the Patina desktop
+/// that's Super+D and Super+Shift+D, which the compositor sends a terminal
+/// as those. Taken before the shell, which would read them as Ctrl+D, the
 /// end of its input.
 fn split_key(ctx: &egui::Context) -> Option<Dir> {
-    let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+    let right = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+    let down = right | egui::Modifiers::ALT;
     ctx.input_mut(|i| {
         let mut split = None;
-        for (key, dir) in [(egui::Key::D, Dir::Right), (egui::Key::E, Dir::Down)] {
+        for (keys, dir) in [(right, Dir::Right), (down, Dir::Down)] {
             let before = i.events.len();
             i.events.retain(|e| {
-                !matches!(e, egui::Event::Key { key: k, pressed: true, modifiers: m, .. } if *k == key && m.matches_exact(keys))
+                !matches!(e, egui::Event::Key { key: egui::Key::D, pressed: true, modifiers: m, .. } if m.matches_exact(keys))
             });
             if i.events.len() != before {
                 split = Some(dir);
@@ -1250,12 +1252,13 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_shift_d_and_e_split_and_never_reach_the_shell() {
+    fn ctrl_shift_d_splits_right_and_with_alt_down_never_reaching_the_shell() {
         let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
         for (events, want) in [
             (vec![key(egui::Key::D, keys)], Some(Dir::Right)),
-            (vec![key(egui::Key::E, keys)], Some(Dir::Down)),
+            (vec![key(egui::Key::D, keys | egui::Modifiers::ALT)], Some(Dir::Down)),
+            (vec![key(egui::Key::E, keys)], None),
             // Plain Ctrl+D is the shell's end of input.
             (vec![key(egui::Key::D, egui::Modifiers::CTRL)], None),
         ] {
@@ -1268,7 +1271,7 @@ mod tests {
                 left = ui.input(|i| i.events.len());
             });
             assert_eq!(got, want);
-            assert_eq!(left, usize::from(want.is_none()), "a split key is taken");
+            assert_eq!(left, usize::from(want.is_none()), "only a split key is taken");
         }
     }
 
