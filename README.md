@@ -51,6 +51,11 @@ comes from the skin's own colours and a light or dark Tango palette.
 
 Ctrl+C, Ctrl+V and the rest go to the shell as usual.
 
+Started with `--working-directory DIR`, the first pane starts there; otherwise where Teleprinter
+was started, so a file manager's "Open Terminal Here" opens in that folder. `-e PROGRAM ARGS…`
+runs a program in the first pane instead of your shell, as launchers do for apps that run in a
+terminal. On the Patina desktop it's the terminal apps open (`$TERMINAL`).
+
 On the Patina desktop, Super+T and Super+W open and close tabs, as Cmd does on a Mac: the
 compositor sends a terminal Ctrl+Shift with the key.
 

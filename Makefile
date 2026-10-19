@@ -52,16 +52,18 @@ icon: ## docs/icon.png: the app icon at 120 px, for the README
 # For the current user; no sudo. The launcher's Exec gets the absolute path,
 # so it works even if $(BINDIR) isn't on the GNOME session's PATH. On
 # Wayland the window icon comes from this launcher, matched by app id.
-install: build ## Install Teleprinter and its launcher for the current user (PREFIX=~/.local)
-	install -Dm755 target/release/teleprinter $(BINDIR)/teleprinter
-	install -Dm644 packaging/linux/teleprinter.svg $(ICONDIR)/scalable/apps/$(APP_ID).svg
-	install -Dm644 assets/teleprinter-icon-128.png $(ICONDIR)/128x128/apps/$(APP_ID).png
-	install -d $(APPSDIR)
-	sed 's|^Exec=teleprinter|Exec=$(BINDIR)/teleprinter|' packaging/linux/$(APP_ID).desktop > $(APPSDIR)/$(APP_ID).desktop
-	-update-desktop-database -q $(APPSDIR)
+install: build ## Install Teleprinter and its launcher for the current user (PREFIX=~/.local; DESTDIR to stage it)
+	install -Dm755 target/release/teleprinter $(DESTDIR)$(BINDIR)/teleprinter
+	install -Dm644 packaging/linux/teleprinter.svg $(DESTDIR)$(ICONDIR)/scalable/apps/$(APP_ID).svg
+	install -Dm644 assets/teleprinter-icon-128.png $(DESTDIR)$(ICONDIR)/128x128/apps/$(APP_ID).png
+	install -d $(DESTDIR)$(APPSDIR)
+	@# The entry's Exec is where it will be, without DESTDIR.
+	sed 's|^Exec=teleprinter|Exec=$(BINDIR)/teleprinter|' packaging/linux/$(APP_ID).desktop > $(DESTDIR)$(APPSDIR)/$(APP_ID).desktop
+	@# Staged for another machine (Patina's make deploy), its caches are its own.
+	@test -n "$(DESTDIR)" || { update-desktop-database -q $(APPSDIR) || true; }
 	@# GTK trusts an icon cache over the folder, so refresh one if it exists.
-	-@test ! -f $(ICONDIR)/icon-theme.cache || gtk-update-icon-cache -q -t -f $(ICONDIR)
-	@echo "Installed $(BINDIR)/teleprinter and the $(APP_ID) launcher"
+	@test -n "$(DESTDIR)" || test ! -f $(ICONDIR)/icon-theme.cache || gtk-update-icon-cache -q -t -f $(ICONDIR) || true
+	@echo "Installed $(DESTDIR)$(BINDIR)/teleprinter and the $(APP_ID) launcher"
 
 uninstall: ## Remove what make install put in place
 	rm -f $(BINDIR)/teleprinter $(APPSDIR)/$(APP_ID).desktop

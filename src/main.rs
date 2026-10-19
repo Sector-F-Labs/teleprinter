@@ -6,6 +6,7 @@ mod config;
 mod control;
 mod emoji;
 mod fonts;
+mod launch;
 mod palette;
 mod screenshot;
 mod session;
@@ -33,6 +34,17 @@ fn main() -> eframe::Result {
     if args.first().is_some_and(|a| a == "msg") {
         std::process::exit(control::client(&args[1..]));
     }
+    let launch = match launch::parse(&args) {
+        Ok(launch) => launch,
+        Err(e) if e.is_empty() => {
+            println!("{}", launch::USAGE);
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("teleprinter: {e}\n{}", launch::USAGE);
+            std::process::exit(2);
+        }
+    };
     let config = config::Config::load();
     let custom_frame = !config.system_title_bar;
     let options = eframe::NativeOptions {
@@ -50,6 +62,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "teleprinter",
         options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc, config)))),
+        Box::new(|cc| Ok(Box::new(app::App::new(cc, config, launch)))),
     )
 }

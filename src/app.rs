@@ -116,7 +116,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, mut config: Config) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mut config: Config, launch: crate::launch::Launch) -> Self {
         patina::appearance::watch(&cc.egui_ctx);
         crate::fonts::install(&cc.egui_ctx);
         // Disable egui's default Ctrl+Q (Cmd+Q on Mac) quit shortcut
@@ -152,7 +152,10 @@ impl App {
             control,
             window_title: String::new(),
         };
-        let first = app.spawn(&cc.egui_ctx, None, dirs::home_dir(), HashMap::new());
+        // `-e` runs in the first pane alone; `--working-directory`, else
+        // where Teleprinter was started, is where it starts.
+        let cwd = crate::launch::first_directory(launch.cwd, std::env::current_dir().ok(), dirs::home_dir());
+        let first = app.spawn(&cc.egui_ctx, launch.command, cwd, HashMap::new());
         app.tabs.push(Tab::new(first));
         // `TELEPRINTER_SPLITS=right,down` splits the active pane in turn at start
         // (for screenshots).
