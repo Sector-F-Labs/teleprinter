@@ -420,7 +420,7 @@ impl App {
                 actions.push(Action::NewTab);
                 ui.close();
             }
-            if ui.button("Close Tab").clicked() {
+            if ui.add(egui::Button::new("Close Tab").shortcut_text("Ctrl+Shift+W")).clicked() {
                 actions.push(Action::CloseTab(self.tab));
                 ui.close();
             }
@@ -555,7 +555,7 @@ impl App {
     /// for a new one, spanning the bar's height (`span`, padding and all).
     fn tab_strip(&self, ui: &mut egui::Ui, span: egui::Rangef, style: &FrameStyle, actions: &mut Vec<Action>) {
         let titles: Vec<_> = self.tabs.iter().map(|tab| self.title(tab.active)).collect();
-        if let Some(action) = TabStrip::new(&titles, self.tab, style).span(span).show(ui) {
+        if let Some(action) = TabStrip::new(&titles, self.tab, style).new_hint("New Tab (Ctrl+Shift+T)").span(span).show(ui) {
             actions.push(action.into());
         }
     }
@@ -941,7 +941,7 @@ impl eframe::App for App {
 
         let mut actions = Vec::new();
         // Taken before the panes see them: these keys don't reach the shell.
-        actions.extend(tabs::keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
+        actions.extend(tabs::terminal_keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
         actions.extend(tab_number(&ctx, self.tabs.len()).map(Action::ShowTab));
         let header = frame::header_frame(ui.style(), &style, radius);
         egui::Panel::top("header").frame(header).show(ui, |ui| {

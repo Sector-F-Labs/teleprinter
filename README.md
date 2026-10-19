@@ -45,11 +45,14 @@ comes from the skin's own colours and a light or dark Tango palette.
 | Drag the border between panes | Resize them |
 | Ctrl+Shift+T, or + in the title bar | New tab |
 | Ctrl+Page Up / Down | Previous / next tab |
-| Middle-click a tab, or its × | Close the tab and its panes |
+| Ctrl+Shift+W, middle-click a tab, or its × | Close the tab and its panes |
 | Title bar arrow, or double-click the title | Collapse / expand the pane |
 | Mouse wheel | Scroll history (arrow keys in full-screen programs like `less`) |
 
 Ctrl+C, Ctrl+V and the rest go to the shell as usual.
+
+On the Patina desktop, Super+T and Super+W open and close tabs, as Cmd does on a Mac: the
+compositor sends a terminal Ctrl+Shift with the key.
 
 ## Build
 
