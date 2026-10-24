@@ -952,7 +952,7 @@ impl eframe::App for App {
             // The bar's full height, for the tabs to fill.
             let span = (ui.max_rect() + header.inner_margin).y_range();
             // No title: each pane has its own, and the space is the tabs'.
-            TitleBar::new("", &style).custom(self.custom_frame).menu_bar(true).show(
+            TitleBar::new("", &style).custom(self.custom_frame).menu_bar(true).span(span).show(
                 ui,
                 |ui| {
                     self.menus(ui, &mut actions);
@@ -1543,7 +1543,7 @@ mod tests {
             let header = frame::header_frame(ui.style(), &style, 0);
             egui::Panel::top("header").frame(header).show(ui, |ui| {
                 let span = (ui.max_rect() + header.inner_margin).y_range();
-                TitleBar::new("", &style).menu_bar(true).show(ui, |ui| app.tab_strip(ui, span, &style, &mut actions), |_| {});
+                TitleBar::new("", &style).menu_bar(true).span(span).show(ui, |ui| app.tab_strip(ui, span, &style, &mut actions), |_| {});
             });
         });
         actions
