@@ -40,6 +40,9 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_TABS=3`
 - `src/fonts.rs`: bundled MesloLGS NF (ADR-0002).
 - `src/emoji.rs`: colour emoji from bundled Noto Color Emoji, painted as textures since egui can't
   draw colour glyphs; `view::emoji_at` joins the cells of a ZWJ sequence, skin tone or flag (ADR-0013).
+- `src/drop.rs`: files dropped on the window, typed into the pane under them as shell-quoted
+  paths (so Claude Code attaches images); a Wayland data device of our own on winit's connection,
+  since winit 0.30 has no Wayland drops (ADR-0014).
 - `src/tiles.rs`: rows and columns of weighted children (split, insert, move, close, swap, dividers,
   layout with folded panes), pure and unit-tested (ADR-0005, ADR-0008).
 - `src/app.rs`: window, Patina title bar with menus and tabs (each its own tile tree, ADR-0012; the strip and its keys are `patina::tabs`),

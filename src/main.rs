@@ -4,6 +4,7 @@
 mod app;
 mod config;
 mod control;
+mod drop;
 mod emoji;
 mod fonts;
 mod launch;

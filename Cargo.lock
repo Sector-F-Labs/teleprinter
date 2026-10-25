@@ -3322,11 +3322,14 @@ dependencies = [
  "image",
  "libc",
  "patina-ui",
+ "raw-window-handle",
  "resvg",
  "serde",
  "serde_json",
  "toml",
  "ttf-parser",
+ "wayland-backend",
+ "wayland-client",
 ]
 
 [[package]]

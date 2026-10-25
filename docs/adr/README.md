@@ -55,6 +55,7 @@ mechanics of adding one.
 | [0011](0011-report-clicks-and-drags-shift-selects.md) | Report clicks and drags to programs that ask for the mouse; Shift selects | Accepted |
 | [0012](0012-tabs-in-the-title-bar.md) | Tabs in the title bar, in place of the window title | Proposed |
 | [0013](0013-colour-emoji-from-bundled-noto.md) | Colour emoji from a bundled Noto Color Emoji, painted as images | Accepted |
+| [0014](0014-dropped-files-type-their-paths.md) | Dropped files type their paths, with our own Wayland drop target | Accepted |
 
 ## Decision Relationship
 
@@ -74,6 +75,7 @@ flowchart TD
     F --> L[0012: tabs in the title bar]
     G --> L
     B --> M[0013: colour emoji from bundled Noto]
+    D --> N[0014: dropped files type their paths]
 ```
 
 ## Revisit Triggers

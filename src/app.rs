@@ -113,6 +113,8 @@ pub struct App {
     control: Option<control::Server>,
     /// The window title last sent: sending one requests a repaint, so only on a change.
     window_title: String,
+    /// Files dropped on the window, typed into a pane (ADR-0014).
+    drops: crate::drop::Drops,
 }
 
 impl App {
@@ -151,6 +153,7 @@ impl App {
             screenshot: std::env::var_os("TELEPRINTER_SCREENSHOT").map(|p| (PathBuf::from(p), false)),
             control,
             window_title: String::new(),
+            drops: crate::drop::Drops::new(cc),
         };
         // `-e` runs in the first pane alone; `--working-directory`, else
         // where Teleprinter was started, is where it starts.
@@ -338,6 +341,19 @@ impl App {
             .filter(|(_, r)| r.x_range().contains(at.x) && r.bottom() <= at.y)
             .max_by(|a, b| a.1.bottom().total_cmp(&b.1.bottom()))
             .map_or(self.active(), |(id, _)| *id)
+    }
+
+    /// Types dropped files' paths into the pane they were dropped on, else
+    /// the active one, which takes the keyboard.
+    fn drop_files(&mut self, ctx: &egui::Context) {
+        for dropped in self.drops.take(ctx) {
+            let on = dropped.at.and_then(|at| self.tiles.iter().find(|(_, r)| r.contains(at))).map(|(id, _)| *id);
+            let id = on.unwrap_or(self.active());
+            if let Some(Ok(session)) = self.panes.get(&id).map(|p| &p.session) {
+                session.paste(&crate::drop::typed(&dropped.paths));
+            }
+            self.activate(id);
+        }
     }
 
     /// Closes a pane; closing a tab's last one closes the tab, and the last
@@ -917,6 +933,7 @@ impl eframe::App for App {
         let radius = if self.custom_frame { frame::corner_radius(&ctx, style.radius) } else { 0 };
 
         self.answer_calls(&ctx);
+        self.drop_files(&ctx);
         let mut exited = Vec::new();
         let several = self.panes.len() > 1;
         for (id, pane) in &mut self.panes {
@@ -1217,6 +1234,7 @@ mod tests {
             screenshot: None,
             control: None,
             window_title: String::new(),
+            drops: crate::drop::Drops::none(),
         }
     }
 
