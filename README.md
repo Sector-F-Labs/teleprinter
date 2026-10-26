@@ -44,6 +44,7 @@ comes from the skin's own colours and a light or dark Tango palette.
 | …and hold still before letting go | Swap the two panes |
 | Right-click the background | New Terminal in that space |
 | Drag the border between panes | Resize them |
+| Ctrl+Shift+N | New window, in the active pane's directory |
 | Ctrl+Shift+T, or + in the title bar | New tab |
 | Ctrl+Page Up / Down | Previous / next tab |
 | Ctrl+Shift+W, middle-click a tab, or its × | Close the tab and its panes |
@@ -57,7 +58,7 @@ was started, so a file manager's "Open Terminal Here" opens in that folder. `-e 
 runs a program in the first pane instead of your shell, as launchers do for apps that run in a
 terminal. On the Patina desktop it's the terminal apps open (`$TERMINAL`).
 
-On the Patina desktop, Super+T and Super+W open and close tabs, and Super+D and Super+Shift+D
+On the Patina desktop, Super+N opens a window, Super+T and Super+W open and close tabs, and Super+D and Super+Shift+D
 split right and down, as Cmd does on a Mac: the compositor sends a terminal Ctrl+Shift with the
 key, and Ctrl+Alt+Shift for Super+Shift.
 

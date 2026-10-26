@@ -58,6 +58,8 @@ enum Action {
     /// A new pane in the empty space at this point (the background's menu).
     NewAt(egui::Pos2),
     NewTab,
+    /// Another Teleprinter window, in the active pane's directory.
+    NewWindow,
     ShowTab(usize),
     CloseTab(usize),
 }
@@ -223,6 +225,32 @@ impl App {
         let id = self.spawn(ctx, None, self.cwd(self.active()), HashMap::new());
         self.tabs.push(Tab::new(id));
         self.show_tab(self.tabs.len() - 1);
+    }
+
+    /// Another Teleprinter, a window of its own, starting in the active
+    /// pane's directory. Waited on by a thread so it leaves no zombie.
+    fn new_window(&mut self) {
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                self.status = Some(Status::error(format!("Couldn't open a window: {e}")));
+                return;
+            }
+        };
+        let mut command = std::process::Command::new(exe);
+        if let Some(dir) = self.cwd(self.active()) {
+            command.arg("--working-directory").arg(dir);
+        }
+        // What this window was started with for one run isn't the new one's.
+        for var in ["TELEPRINTER_COMMAND", "TELEPRINTER_SCREENSHOT", "TELEPRINTER_SPLITS", "TELEPRINTER_TABS", "TELEPRINTER_COLLAPSED"] {
+            command.env_remove(var);
+        }
+        match command.spawn() {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+            }
+            Err(e) => self.status = Some(Status::error(format!("Couldn't open a window: {e}"))),
+        }
     }
 
     fn show_tab(&mut self, tab: usize) {
@@ -422,6 +450,11 @@ impl App {
     /// Left side of the title bar: word menus (Patina's ADR-0006).
     fn menus(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.menu_button("File", |ui| {
+            if ui.add(egui::Button::new("New Window").shortcut_text("Ctrl+Shift+N")).clicked() {
+                actions.push(Action::NewWindow);
+                ui.close();
+            }
+            ui.separator();
             if ui.add(egui::Button::new("Split Right").shortcut_text("Ctrl+Shift+D")).clicked() {
                 actions.push(Action::Split(Dir::Right));
                 ui.close();
@@ -964,6 +997,9 @@ impl eframe::App for App {
         actions.extend(tabs::terminal_keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
         actions.extend(tab_number(&ctx, self.tabs.len()).map(Action::ShowTab));
         actions.extend(split_key(&ctx).map(Action::Split));
+        if new_window_key(&ctx) {
+            actions.push(Action::NewWindow);
+        }
         let header = frame::header_frame(ui.style(), &style, radius);
         egui::Panel::top("header").frame(header).show(ui, |ui| {
             // The bar's full height, for the tabs to fill.
@@ -1069,6 +1105,7 @@ impl eframe::App for App {
                 Action::Close(id) => self.close(&ctx, id),
                 Action::NewAt(at) => self.new_at(&ctx, at),
                 Action::NewTab => self.new_tab(&ctx),
+                Action::NewWindow => self.new_window(),
                 Action::ShowTab(tab) => self.show_tab(tab),
                 Action::CloseTab(tab) => self.close_tab(&ctx, tab),
             }
@@ -1124,6 +1161,20 @@ fn split_key(ctx: &egui::Context) -> Option<Dir> {
             }
         }
         split
+    })
+}
+
+/// Ctrl+Shift+N opens another window, Super+N on the Patina desktop, as
+/// Cmd+N does on a Mac. Taken before the shell, which would read it as
+/// Ctrl+N.
+fn new_window_key(ctx: &egui::Context) -> bool {
+    let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+    ctx.input_mut(|i| {
+        let before = i.events.len();
+        i.events.retain(|e| {
+            !matches!(e, egui::Event::Key { key: egui::Key::N, pressed: true, modifiers: m, .. } if m.matches_exact(keys))
+        });
+        i.events.len() != before
     })
 }
 
@@ -1290,6 +1341,28 @@ mod tests {
             });
             assert_eq!(got, want);
             assert_eq!(left, usize::from(want.is_none()), "only a split key is taken");
+        }
+    }
+
+    #[test]
+    fn ctrl_shift_n_opens_a_window_and_ctrl_n_stays_the_shells() {
+        let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
+        for (event, want) in [
+            (key(egui::Key::N, keys), true),
+            // Readline's next line.
+            (key(egui::Key::N, egui::Modifiers::CTRL), false),
+            (key(egui::Key::N, keys | egui::Modifiers::ALT), false),
+        ] {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput { events: vec![event], ..Default::default() };
+            let (mut got, mut left) = (false, 0);
+            let _ = ctx.run_ui(input, |ui| {
+                got = new_window_key(ui.ctx());
+                left = ui.input(|i| i.events.len());
+            });
+            assert_eq!(got, want);
+            assert_eq!(left, usize::from(!want), "only the window key is taken");
         }
     }
 
