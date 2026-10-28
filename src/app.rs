@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use alacritty_terminal::event::WindowSize;
 use egui::{Id, Rect};
 use patina::frame::{self, FrameStyle, TitleBar};
+use patina::menu;
 use patina::skin::{self, Skin};
 use patina::tabs::{self, TabAction, TabStrip};
 
@@ -695,7 +696,7 @@ impl App {
                 // Only the opening click is held back, so a menu already open stays open.
                 let program_click = response.secondary_clicked() && view::takes_right_click(ui, session);
                 if !program_click {
-                    response.context_menu(|ui| {
+                    menu::context(&response, |ui| {
                         if ui.button("Split Right").clicked() {
                             actions.push(Action::Split(Dir::Right));
                             ui.close();
@@ -772,7 +773,7 @@ impl App {
         } else if response.clicked() || response.secondary_clicked() {
             self.activate(id);
         }
-        response.context_menu(|ui| {
+        menu::context(&response, |ui| {
             if ui.button("Split Right").clicked() {
                 actions.push(Action::Split(Dir::Right));
                 ui.close();
@@ -1035,7 +1036,7 @@ impl eframe::App for App {
                 if response.secondary_clicked() {
                     self.menu_at = response.interact_pointer_pos();
                 }
-                response.context_menu(|ui| {
+                menu::context(&response, |ui| {
                     if ui.button("New Terminal").clicked() {
                         if let Some(at) = self.menu_at {
                             actions.push(Action::NewAt(at));
