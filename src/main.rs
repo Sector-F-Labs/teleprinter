@@ -2,6 +2,7 @@
 //! alacritty_terminal doing the emulation.
 
 mod app;
+mod boxdraw;
 mod config;
 mod control;
 mod drop;
