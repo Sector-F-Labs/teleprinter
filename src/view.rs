@@ -12,6 +12,7 @@ use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use egui::{Color32, Event, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use ttf_parser::GlyphId;
 
+use crate::boxdraw;
 use crate::emoji;
 use crate::fonts;
 use crate::palette::{self, Palette};
@@ -444,6 +445,7 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
     }
     let mut runs: Vec<Run> = Vec::new();
     let mut emojis: Vec<(GlyphId, Rect)> = Vec::new();
+    let mut drawn: Vec<(Rect, char, Color32)> = Vec::new();
     let mut last: Option<Point> = None;
     // Cells before this index are the tail of an emoji sequence already placed.
     let mut emoji_until = 0;
@@ -500,6 +502,11 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
             last = None;
             continue;
         }
+        if boxdraw::handles(c.c) && c.zerowidth().is_none() {
+            drawn.push((cell_rect, c.c, fg));
+            last = None;
+            continue;
+        }
         let bold = c.flags.contains(Flags::BOLD);
         let italic = c.flags.contains(Flags::ITALIC);
         // Only plain ASCII joins a run: other glyphs (icons, CJK, emoji) may be wider
@@ -522,6 +529,9 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
     for run in runs {
         painter.text(run.start, egui::Align2::LEFT_TOP, run.text, fonts::font(font_size, run.bold, run.italic), run.color);
     }
+    for (rect, c, color) in drawn {
+        paint_cell_glyph(painter, rect, c, color);
+    }
     for (glyph, rect) in emojis {
         emoji::paint(painter, glyph, rect);
     }
@@ -542,6 +552,25 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
         }
         CursorShape::Underline => {
             painter.rect_filled(Rect::from_min_max(pos2(rect.left(), rect.bottom() - 2.0), rect.max), 0.0, palette.cursor);
+        }
+    }
+}
+
+/// A box drawing or block character from rectangles inside its cell (ADR-0015).
+fn paint_cell_glyph(painter: &egui::Painter, cell: Rect, c: char, color: Color32) {
+    for piece in boxdraw::pieces(c, cell.size()) {
+        match piece {
+            boxdraw::Piece::Rect { rect: [x0, y0, x1, y1], alpha } => {
+                let rect = Rect::from_min_max(cell.min + vec2(x0, y0), cell.min + vec2(x1, y1));
+                painter.rect_filled(rect, 0.0, if alpha < 1.0 { color.gamma_multiply(alpha) } else { color });
+            }
+            boxdraw::Piece::Line { from, to, width } => {
+                painter.line_segment([cell.min + from.to_vec2(), cell.min + to.to_vec2()], Stroke::new(width, color));
+            }
+            boxdraw::Piece::Triangle(points) => {
+                let points = points.iter().map(|p| cell.min + p.to_vec2()).collect();
+                painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+            }
         }
     }
 }
