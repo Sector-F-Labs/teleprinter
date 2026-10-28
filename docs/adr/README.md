@@ -57,6 +57,7 @@ mechanics of adding one.
 | [0013](0013-colour-emoji-from-bundled-noto.md) | Colour emoji from a bundled Noto Color Emoji, painted as images | Accepted |
 | [0014](0014-dropped-files-type-their-paths.md) | Dropped files type their paths, with our own Wayland drop target | Accepted |
 | [0015](0015-box-and-block-glyphs-drawn-in-the-cell.md) | Box drawing and block glyphs drawn in the cell | Accepted |
+| [0016](0016-braille-scan-lines-and-sextants-drawn-in-the-cell.md) | Braille, scan lines and sextants drawn in the cell | Accepted |
 
 ## Decision Relationship
 
@@ -78,6 +79,7 @@ flowchart TD
     B --> M[0013: colour emoji from bundled Noto]
     D --> N[0014: dropped files type their paths]
     B --> O[0015: box and block glyphs drawn in the cell]
+    O --> P[0016: braille, scan lines and sextants drawn in the cell]
 ```
 
 ## Revisit Triggers
