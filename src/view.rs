@@ -556,7 +556,7 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
     }
 }
 
-/// A box drawing or block character from rectangles inside its cell (ADR-0015).
+/// A box drawing, block, Braille or sextant character from rectangles inside its cell (ADR-0015).
 fn paint_cell_glyph(painter: &egui::Painter, cell: Rect, c: char, color: Color32) {
     for piece in boxdraw::pieces(c, cell.size()) {
         match piece {
@@ -566,6 +566,9 @@ fn paint_cell_glyph(painter: &egui::Painter, cell: Rect, c: char, color: Color32
             }
             boxdraw::Piece::Line { from, to, width } => {
                 painter.line_segment([cell.min + from.to_vec2(), cell.min + to.to_vec2()], Stroke::new(width, color));
+            }
+            boxdraw::Piece::Circle { center, radius } => {
+                painter.circle_filled(cell.min + center.to_vec2(), radius, color);
             }
             boxdraw::Piece::Triangle(points) => {
                 let points = points.iter().map(|p| cell.min + p.to_vec2()).collect();

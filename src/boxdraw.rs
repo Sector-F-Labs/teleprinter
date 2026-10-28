@@ -1,4 +1,4 @@
-//! Box drawing, block elements and the Powerline triangles, drawn from rectangles inside the
+//! Box drawing, block elements, Braille, scan lines, sextants and the Powerline triangles, drawn from rectangles inside the
 //! cell instead of from the font (ADR-0015). MesloLGS's line glyphs are 1.64 em tall in a
 //! 1.26 em cell, so as text they spill into the rows above and below.
 
@@ -11,11 +11,15 @@ pub enum Piece {
     Rect { rect: [f32; 4], alpha: f32 },
     Line { from: Pos2, to: Pos2, width: f32 },
     Triangle([Pos2; 3]),
+    Circle { center: Pos2, radius: f32 },
 }
 
 /// Whether `c` is drawn here rather than by the font.
 pub fn handles(c: char) -> bool {
-    matches!(c, '\u{2500}'..='\u{259F}' | '\u{E0B0}' | '\u{E0B2}')
+    matches!(
+        c,
+        '\u{2500}'..='\u{259F}' | '\u{2800}'..='\u{28FF}' | '\u{23BA}'..='\u{23BD}' | '\u{1FB00}'..='\u{1FB3B}' | '\u{E0B0}' | '\u{E0B2}'
+    )
 }
 
 /// The pieces of `c` in a cell of the given size, or none if it isn't one of ours.
@@ -23,6 +27,9 @@ pub fn pieces(c: char, cell: Vec2) -> Vec<Piece> {
     match c {
         '\u{2500}'..='\u{257F}' => lines(c, cell),
         '\u{2580}'..='\u{259F}' => blocks(c, cell),
+        '\u{2800}'..='\u{28FF}' => braille(c, cell),
+        '\u{23BA}'..='\u{23BD}' => scan_line(c, cell),
+        '\u{1FB00}'..='\u{1FB3B}' => sextants(c, cell),
         '\u{E0B0}' => vec![Piece::Triangle([pos2(0.0, 0.0), pos2(cell.x, cell.y / 2.0), pos2(0.0, cell.y)])],
         '\u{E0B2}' => vec![Piece::Triangle([pos2(cell.x, 0.0), pos2(0.0, cell.y / 2.0), pos2(cell.x, cell.y)])],
         _ => Vec::new(),
@@ -143,6 +150,51 @@ fn arm(w: u8, forward: bool, perp: (u8, u8), opposite: bool, t: f32, along: f32,
         .collect()
 }
 
+/// Braille: eight dots in two columns of four. Bits 0-2 are the left column from the top, 3-5
+/// the right, 6 and 7 the bottom row, left then right.
+fn braille(c: char, cell: Vec2) -> Vec<Piece> {
+    let bits = c as u32 - 0x2800;
+    let radius = (cell.x / 4.0).min(cell.y / 8.0) * 0.7;
+    let dots = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (0, 3), (1, 3)];
+    dots.iter()
+        .enumerate()
+        .filter(|(i, _)| bits & (1 << i) != 0)
+        .map(|(_, &(col, row))| Piece::Circle {
+            center: pos2(cell.x * (0.25 + 0.5 * col as f32), cell.y * (row as f32 + 0.5) / 4.0),
+            radius,
+        })
+        .collect()
+}
+
+/// The VT100 scan lines U+23BA-23BD, at scan 1, 3, 7 and 9 of 9: the top, a quarter, three
+/// quarters and the bottom of the cell.
+fn scan_line(c: char, cell: Vec2) -> Vec<Piece> {
+    let t = light(cell);
+    let at = [0.0, 0.25, 0.75, 1.0][(c as u32 - 0x23BA) as usize];
+    let y0 = (cell.y * at - t / 2.0).round().clamp(0.0, cell.y - t);
+    vec![Piece::Rect { rect: [0.0, y0, cell.x, y0 + t], alpha: 1.0 }]
+}
+
+/// Sextants U+1FB00-1FB3B: a 2x3 grid of blocks. The 60 glyphs are the patterns 1-62 without
+/// the left half (21) and the right half (42), which are U+258C and U+2590.
+fn sextants(c: char, cell: Vec2) -> Vec<Piece> {
+    let mut pattern = c as u32 - 0x1FB00 + 1;
+    if pattern >= 21 {
+        pattern += 1;
+    }
+    if pattern >= 42 {
+        pattern += 1;
+    }
+    (0..6)
+        .filter(|i| pattern & (1 << i) != 0)
+        .map(|i| {
+            let (col, row) = ((i % 2) as f32, (i / 2) as f32);
+            let rect = [col * 0.5 * cell.x, row * cell.y / 3.0, (col + 1.0) * 0.5 * cell.x, (row + 1.0) * cell.y / 3.0];
+            Piece::Rect { rect, alpha: 1.0 }
+        })
+        .collect()
+}
+
 fn blocks(c: char, cell: Vec2) -> Vec<Piece> {
     let part = |x0: f32, y0: f32, x1: f32, y1: f32| [x0 * cell.x, y0 * cell.y, x1 * cell.x, y1 * cell.y];
     let solid = |rects: &[[f32; 4]]| rects.iter().map(|&rect| Piece::Rect { rect, alpha: 1.0 }).collect();
@@ -197,12 +249,20 @@ mod tests {
 
     #[test]
     fn nothing_leaves_the_cell() {
-        for c in ('\u{2500}'..='\u{259F}').chain(['\u{E0B0}', '\u{E0B2}']) {
+        for c in ('\u{2500}'..='\u{259F}')
+            .chain('\u{2800}'..='\u{28FF}')
+            .chain('\u{23BA}'..='\u{23BD}')
+            .chain('\u{1FB00}'..='\u{1FB3B}')
+            .chain(['\u{E0B0}', '\u{E0B2}'])
+        {
             for p in pieces(c, CELL) {
                 let points: Vec<Pos2> = match p {
                     Piece::Rect { rect, .. } => vec![pos2(rect[0], rect[1]), pos2(rect[2], rect[3])],
                     Piece::Line { from, to, .. } => vec![from, to],
                     Piece::Triangle(t) => t.to_vec(),
+                    Piece::Circle { center, radius } => {
+                        vec![center - Vec2::splat(radius), center + Vec2::splat(radius)]
+                    }
                 };
                 for q in points {
                     assert!((0.0..=CELL.x).contains(&q.x) && (0.0..=CELL.y).contains(&q.y), "{c:?} has {q:?}");
@@ -242,6 +302,33 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!((alpha('\u{2591}'), alpha('\u{2592}'), alpha('\u{2593}')), (0.25, 0.5, 0.75));
+    }
+
+    #[test]
+    fn braille_has_a_dot_per_set_bit() {
+        assert!(pieces('\u{2800}', CELL).is_empty());
+        assert_eq!(pieces('\u{28FF}', CELL).len(), 8);
+        assert_eq!(pieces('\u{2801}', CELL).len(), 1);
+        let Piece::Circle { center, .. } = pieces('\u{2840}', CELL)[0] else { unreachable!() };
+        assert!(center.x < CELL.x / 2.0 && center.y > CELL.y * 0.75, "dot 7 is bottom left");
+    }
+
+    #[test]
+    fn scan_lines_run_across_from_top_to_bottom() {
+        let ys: Vec<f32> = ('\u{23BA}'..='\u{23BD}').map(|c| bounds(c)[1]).collect();
+        assert!(ys.windows(2).all(|w| w[0] < w[1]), "{ys:?}");
+        assert_eq!(bounds('\u{23BA}')[0..3], [0.0, 0.0, CELL.x][..]);
+    }
+
+    #[test]
+    fn sextants_skip_the_halves() {
+        let area = |c| pieces(c, CELL).len();
+        assert_eq!(area('\u{1FB00}'), 1);
+        assert_eq!(area('\u{1FB3B}'), 5);
+        // U+1FB13 is pattern 20; U+1FB14 is 22, the left half (21) being skipped.
+        assert_eq!(area('\u{1FB13}'), 2);
+        assert_eq!(area('\u{1FB14}'), 3);
+        assert_eq!(bounds('\u{1FB3B}'), [0.0, 0.0, CELL.x, CELL.y]);
     }
 
     #[test]
