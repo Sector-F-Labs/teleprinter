@@ -635,7 +635,7 @@ impl App {
         let Some((tab, name)) = &mut self.renaming else { return };
         let tab = *tab;
         let (mut keep, mut cancel) = (false, false);
-        egui::Window::new("Rename Tab").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        egui::Window::new("Rename Tab").order(egui::Order::Foreground).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             let edit = ui.add(egui::TextEdit::singleline(name).hint_text("Tab name"));
             if !edit.has_focus() && !edit.lost_focus() {
                 edit.request_focus();
