@@ -63,6 +63,8 @@ enum Action {
     NewWindow,
     ShowTab(usize),
     CloseTab(usize),
+    /// Asks for a name for the tab.
+    RenameTab(usize),
 }
 
 /// A tab: a layout of panes of its own, shown in place of the others.
@@ -70,11 +72,13 @@ struct Tab {
     tree: Node,
     /// The pane that has the keyboard while the tab is shown.
     active: PaneId,
+    /// A name the user gave it, kept instead of the active pane's title.
+    name: Option<String>,
 }
 
 impl Tab {
     fn new(pane: PaneId) -> Self {
-        Self { tree: Node::Leaf(pane), active: pane }
+        Self { tree: Node::Leaf(pane), active: pane, name: None }
     }
 }
 
@@ -97,6 +101,8 @@ pub struct App {
     /// The tab shown; its active pane has the keyboard, and splits and menu actions act on it.
     tab: usize,
     next_id: PaneId,
+    /// The tab being renamed, and the name typed so far.
+    renaming: Option<(usize, String)>,
     /// The pane whose title bar is being dragged onto another, to swap them.
     dragging: Option<PaneId>,
     /// The pane the dragged one is over, and since when (egui time), for swapping.
@@ -146,6 +152,7 @@ impl App {
             tabs: Vec::new(),
             tab: 0,
             next_id: 1,
+            renaming: None,
             dragging: None,
             hovering: None,
             tiles: Vec::new(),
@@ -263,6 +270,7 @@ impl App {
 
     /// Closes every pane in a tab, and so the tab.
     fn close_tab(&mut self, ctx: &egui::Context, tab: usize) {
+        self.renaming = None;
         for id in self.tabs.get(tab).map(|t| t.tree.panes()).unwrap_or_default() {
             self.close(ctx, id);
         }
@@ -607,9 +615,52 @@ impl App {
     /// The tabs, after the menus, each named for its active pane, then +
     /// for a new one, spanning the bar's height (`span`, padding and all).
     fn tab_strip(&self, ui: &mut egui::Ui, span: egui::Rangef, style: &FrameStyle, actions: &mut Vec<Action>) {
-        let titles: Vec<_> = self.tabs.iter().map(|tab| self.title(tab.active)).collect();
-        if let Some(action) = TabStrip::new(&titles, self.tab, style).new_hint("New Tab (Ctrl+Shift+T)").span(span).show(ui) {
+        let titles: Vec<_> = self.tabs.iter().map(|tab| tab.name.clone().unwrap_or_else(|| self.title(tab.active))).collect();
+        let mut renamed = None;
+        let mut menu = |ui: &mut egui::Ui, tab: usize| {
+            if ui.button("Rename Tab").clicked() {
+                renamed = Some(tab);
+                ui.close();
+            }
+        };
+        if let Some(action) = TabStrip::new(&titles, self.tab, style).new_hint("New Tab (Ctrl+Shift+T)").span(span).tab_menu(&mut menu).show(ui) {
             actions.push(action.into());
+        }
+        actions.extend(renamed.map(Action::RenameTab));
+    }
+
+    /// The box for naming a tab: Enter keeps the name, an empty one goes back to the
+    /// pane's title, Escape cancels.
+    fn rename_dialog(&mut self, ctx: &egui::Context) {
+        let Some((tab, name)) = &mut self.renaming else { return };
+        let tab = *tab;
+        let (mut keep, mut cancel) = (false, false);
+        egui::Window::new("Rename Tab").order(egui::Order::Foreground).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            let edit = ui.add(egui::TextEdit::singleline(name).hint_text("Tab name"));
+            if !edit.has_focus() && !edit.lost_focus() {
+                edit.request_focus();
+            }
+            if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                keep = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+            ui.horizontal(|ui| {
+                keep |= ui.button("Rename").clicked();
+                cancel |= ui.button("Cancel").clicked();
+            });
+        });
+        if keep {
+            let name = name.trim();
+            let name = (!name.is_empty()).then(|| name.to_string());
+            if let Some(t) = self.tabs.get_mut(tab) {
+                t.name = name;
+            }
+        }
+        if keep || cancel {
+            self.renaming = None;
+            self.requests.focus = true;
         }
     }
 
@@ -1109,6 +1160,10 @@ impl eframe::App for App {
                 Action::NewWindow => self.new_window(),
                 Action::ShowTab(tab) => self.show_tab(tab),
                 Action::CloseTab(tab) => self.close_tab(&ctx, tab),
+                Action::RenameTab(tab) => {
+                    let name = self.tabs.get(tab).map(|t| t.name.clone().unwrap_or_else(|| self.title(t.active)));
+                    self.renaming = name.map(|name| (tab, name));
+                }
             }
             self.requests.focus = true;
         }
@@ -1116,6 +1171,7 @@ impl eframe::App for App {
         if self.custom_frame {
             frame::edges(&ctx, radius, style.border);
         }
+        self.rename_dialog(&ctx);
         self.take_screenshot(&ctx);
     }
 
@@ -1273,9 +1329,10 @@ mod tests {
             skin_errors: Vec::new(),
             status: None,
             panes: HashMap::from([(1, pane()), (2, pane())]),
-            tabs: vec![Tab { tree, active: 1 }],
+            tabs: vec![Tab { tree, active: 1, name: None }],
             tab: 0,
             next_id: 3,
+            renaming: None,
             dragging: None,
             hovering: None,
             tiles: Vec::new(),
