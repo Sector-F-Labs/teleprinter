@@ -19,7 +19,7 @@ use base64::Engine;
 use egui::{ColorImage, TextureHandle, TextureOptions};
 use polling::{Event, PollMode, Poller};
 
-const PREFIX: &[u8] = b"\x1b]1337;File=";
+const PREFIX: &[u8] = b"\x1b]1337;";
 /// Base of the row-carrying placeholder characters.
 pub const PLACEHOLDER: u32 = 0x10EE00;
 /// Largest sequence taken (base64 included); bigger ones are dropped.
@@ -161,11 +161,13 @@ pub struct Filter {
     /// Read but not yet scanned: a sequence that may still be arriving.
     raw: Vec<u8>,
     out: VecDeque<u8>,
+    /// A multipart image (what `imgcat` sends): its parameters and the base64 so far.
+    multipart: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 impl Filter {
     fn new(file: File, shared: Arc<Shared>) -> Self {
-        Self { file, shared, raw: Vec::new(), out: VecDeque::new() }
+        Self { file, shared, raw: Vec::new(), out: VecDeque::new(), multipart: None }
     }
 
     /// Moves what's complete in `raw` to `out`; `eof` flushes the rest.
@@ -184,8 +186,11 @@ impl Filter {
             if rest.starts_with(PREFIX) {
                 match terminator(rest) {
                     Some((payload_end, end)) => {
-                        let replacement = self.image(&rest[PREFIX.len()..payload_end]);
-                        self.out.extend(replacement);
+                        match self.sequence(&rest[PREFIX.len()..payload_end]) {
+                            Some(replacement) => self.out.extend(replacement),
+                            // Some other OSC 1337: the terminal's to ignore.
+                            None => self.out.extend(&rest[..end]),
+                        }
                         pos = esc + end;
                     }
                     None if rest.len() > MAX_SEQUENCE => {
@@ -207,6 +212,34 @@ impl Filter {
             }
         }
         self.raw = raw[pos..].to_vec();
+    }
+
+    /// What an OSC 1337 body becomes: `None` if it isn't about images.
+    fn sequence(&mut self, body: &[u8]) -> Option<Vec<u8>> {
+        if let Some(rest) = body.strip_prefix(b"File=") {
+            return Some(self.image(rest));
+        }
+        if let Some(params) = body.strip_prefix(b"MultipartFile=") {
+            self.multipart = Some((params.to_vec(), Vec::new()));
+            return Some(Vec::new());
+        }
+        if let Some(part) = body.strip_prefix(b"FilePart=") {
+            if let Some((_, data)) = &mut self.multipart {
+                if data.len() + part.len() > MAX_SEQUENCE {
+                    self.multipart = None;
+                } else {
+                    data.extend_from_slice(part);
+                }
+            }
+            return Some(Vec::new());
+        }
+        if body == b"FileEnd" {
+            let (mut whole, data) = self.multipart.take()?;
+            whole.push(b':');
+            whole.extend(data);
+            return Some(self.image(&whole));
+        }
+        None
     }
 
     /// The bytes that leave room for the image in the grid: rows of
@@ -256,7 +289,10 @@ impl Filter {
             for _ in 0..cols {
                 out.extend(s.as_bytes());
             }
-            out.extend(format!("\x1b[{cols}D\n").into_bytes());
+            // The cursor stays after the image's last row, as in iTerm2.
+            if row + 1 < rows {
+                out.extend(format!("\x1b[{cols}D\n").into_bytes());
+            }
         }
         out.extend(b"\x1b[39m");
         out
@@ -377,6 +413,23 @@ mod tests {
         f.raw.extend_from_slice(b.as_bytes());
         f.scan(false);
         assert!(!f.out.is_empty());
+    }
+
+    #[test]
+    fn a_multipart_image_is_put_together() {
+        let shared = Shared::new(WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 });
+        let mut f = filter(shared.clone());
+        let data = png();
+        let (a, b) = data.split_at(data.len() / 2);
+        let text = format!(
+            "\x1b]1337;MultipartFile=inline=1;size=9\x07\x1b]1337;FilePart={a}\x07\x1b]1337;FilePart={b}\x07\x1b]1337;FileEnd\x07x"
+        );
+        f.raw.extend_from_slice(text.as_bytes());
+        f.scan(false);
+        let out = String::from_utf8(f.out.iter().copied().collect()).unwrap();
+        assert_eq!(out.matches('\u{10EE00}').count(), 2);
+        assert!(out.ends_with("\x1b[39mx"));
+        assert_eq!(shared.incoming.lock().unwrap().len(), 1);
     }
 
     #[test]
