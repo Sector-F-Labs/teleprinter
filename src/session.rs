@@ -17,6 +17,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty;
 
+use crate::images::{ImagePty, Images, Shared};
 use crate::palette::Palette;
 
 #[derive(Clone)]
@@ -54,6 +55,9 @@ impl Dimensions for GridSize {
 pub struct Session {
     pub term: Arc<FairMutex<Term<Listener>>>,
     sender: EventLoopSender,
+    /// Inline images the pty filter found, and their textures (images.rs).
+    pub images: std::cell::RefCell<Images>,
+    shared: Arc<Shared>,
     events: Receiver<Event>,
     window_size: WindowSize,
     /// Set by the shell with OSC 0/2; `None` until then.
@@ -105,10 +109,11 @@ impl Session {
         let listener = Listener { events: tx, ctx: ctx.clone() };
         let size = GridSize { columns: window_size.num_cols as usize, lines: window_size.num_lines as usize };
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, listener.clone())));
-        let event_loop = EventLoop::new(term.clone(), listener, pty, true, false)?;
+        let shared = Shared::new(window_size);
+        let event_loop = EventLoop::new(term.clone(), listener, ImagePty::new(pty, shared.clone())?, true, false)?;
         let sender = event_loop.channel();
         event_loop.spawn();
-        Ok(Self { term, sender, events, window_size, title: None, exited: false, pid, tty, foreground: None, last_probe: None, probe_again: None })
+        Ok(Self { term, sender, images: Default::default(), shared, events, window_size, title: None, exited: false, pid, tty, foreground: None, last_probe: None, probe_again: None })
     }
 
     /// The shell's current directory, where a split from this pane starts.
@@ -150,6 +155,7 @@ impl Session {
 
     /// Handles what the event loop sent since the last frame.
     pub fn pump(&mut self, ctx: &egui::Context, palette: &Palette) {
+        self.images.get_mut().take(&self.shared);
         let mut output = false;
         while let Ok(event) = self.events.try_recv() {
             output |= matches!(event, Event::Wakeup);
