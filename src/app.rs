@@ -680,13 +680,9 @@ impl App {
         let active = id == self.active();
         let style = ctx.global_style();
         let several = self.shown().tree.panes().len() > 1;
-        // The active pane's border is the selection colour, once there's more than one.
-        let stroke = if active && several {
-            egui::Stroke::new(1.5, style.visuals.selection.bg_fill)
-        } else {
-            style.visuals.window_stroke
-        };
-        let mut frame = egui::Frame::window(&style).shadow(egui::Shadow::NONE).stroke(stroke).fill(palette.background).corner_radius(corners);
+        // The frame's stroke is the same for every pane, as egui counts it in the window's size;
+        // the active pane's accent border is painted over it, so focus never moves anything.
+        let mut frame = egui::Frame::window(&style).shadow(egui::Shadow::NONE).stroke(style.visuals.window_stroke).fill(palette.background).corner_radius(corners);
         // egui's title bar is a heading's row, which its buttons are sized to, inside the frame's
         // margin; the margin above and below makes up the configured height. The content gets
         // the same margin, as egui gives it.
@@ -788,6 +784,10 @@ impl App {
             self.shown_mut().active = id;
         }
         let window = shown.response.rect;
+        if active && several {
+            let accent = egui::Stroke::new(1.5, style.visuals.selection.bg_fill);
+            ctx.layer_painter(shown.response.layer_id).rect_stroke(window, corners, accent, egui::StrokeKind::Inside);
+        }
         // The title bar, less the collapse arrow at its left end and the close button at its
         // right: a collapsed window is all title bar.
         let bottom = match content_top {
