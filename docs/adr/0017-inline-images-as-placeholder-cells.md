@@ -56,4 +56,16 @@ programs find that graphics work. Sixel is not supported.
 - A pane keeps at most 256 MB of image pixels; past that the oldest images are dropped and their
   cells go blank, even if still on screen. Images are not freed when they scroll out of the history.
 - Inside tmux, `imgcat` doesn't work: it needs tmux's passthrough wrapper (DCS `tmux;`).
+- A cell's column in its image is counted from the start of the unbroken run of cells it is in,
+  not stored in the cell. If text overwrites the left of an image, or an edit splits a line,
+  the cells that remain draw the left part of the picture, shifted, instead of their own part.
+  The same happens when a pane is narrower than the image and the line wraps. Putting the column
+  in the cell too (as the row is) would fix it.
+- Kitty's replies (to queries and transmissions) are written from the reader thread to the
+  non-blocking pty with nothing coordinating them with the writer that sends keys and pastes. A
+  reply can land in the middle of a paste, or be cut short if the pty's input buffer is full,
+  which would show as stray characters at the prompt. Rare; it would take a shared writer.
+- An image's id is 24 bits (it is the cells' foreground colour) and wraps after 16 million
+  images in one pane. The delete cutoff counts without wrapping, so past that point a delete
+  could drop newer images, and ids could collide with older ones.
 - Revisit if sixel is wanted, or if alacritty_terminal gains a hook for the pty bytes.
