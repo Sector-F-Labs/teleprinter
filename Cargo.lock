@@ -3329,6 +3329,7 @@ dependencies = [
  "dirs",
  "eframe",
  "egui",
+ "flate2",
  "image",
  "libc",
  "patina-ui",
