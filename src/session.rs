@@ -306,12 +306,9 @@ mod bench {
         let start = Instant::now();
         let mut done = None;
         while start.elapsed() < Duration::from_secs(120) {
-            match session.events.recv_timeout(Duration::from_millis(200)) {
-                Ok(Event::Exit) => {
-                    done = Some(start.elapsed().as_secs_f64());
-                    break;
-                }
-                _ => {}
+            if let Ok(Event::Exit) = session.events.recv_timeout(Duration::from_millis(200)) {
+                done = Some(start.elapsed().as_secs_f64());
+                break;
             }
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -330,7 +327,7 @@ mod bench {
         let colour = dir.join("colour.txt");
         let images = dir.join("images.txt");
         let letters = b"abcdefghijklmnopqrstuvwxyz0123456789 ";
-        make(&plain, |i| (0..99).map(|j| letters[(i * 7 + j * 3) % letters.len()]).chain([b'\n']).collect(), 100 * MB);
+        make(&plain, |i| (0..99).map(|j| letters[(i * 7 + j * 3) % letters.len()]).chain(*b"\n").collect(), 100 * MB);
         make(
             &colour,
             |i| format!("\x1b[3{}mline {i}\x1b[0m \x1b[1;4{}mbold\x1b[0m some more text to fill the row out\n", i % 8, (i + 3) % 8).into_bytes(),
