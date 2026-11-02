@@ -12,7 +12,7 @@ SCRATCH_ENV := XDG_CONFIG_HOME=$(CURDIR)/target/scratch-config XDG_DATA_HOME=$(C
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run dev build test check screenshot icons install uninstall clean icon
+.PHONY: help run dev build test bench check screenshot icons install uninstall clean icon
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -31,6 +31,9 @@ build: ## Build a release binary
 
 test: ## Run the tests
 	cargo test
+
+bench: ## Throughput of the event loop on cat of big files (release)
+	cargo test --release bench -- --ignored --nocapture --test-threads=1
 
 check: test ## Run the tests and clippy, as before a commit or release
 	cargo clippy --all-targets -- -D warnings

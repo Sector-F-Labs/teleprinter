@@ -40,8 +40,9 @@ programs find that graphics work. Sixel is not supported.
 - yazi, chafa (`-f kitty`) and `imgcat` show real images; yazi needs no `TERM_PROGRAM` trick.
 - No change to alacritty_terminal, but every byte the shell writes now passes through our
   scanner. Output with no escape in it is read straight into the event loop's buffer; otherwise
-  it's copied once to be scanned. A big `cat` took about as long as before (checked by hand, on
-  the first version of the filter).
+  it's copied once to be scanned. `make bench` (the real event loop on `cat` of 100 MB files):
+  plain text 72 MB/s on master and on this branch, text with an escape every few bytes 64 and
+  62, and the same with a thread contending for the terminal lock 61/61 and 53/52.
 - Output left over when the event loop's buffer is full would sit unseen, as the pty has nothing
   more to say: a pipe in the same poller wakes the loop until it has been read.
 - An image is the cells it left: text written over some of them cuts it, and selecting across it

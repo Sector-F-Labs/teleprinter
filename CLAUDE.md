@@ -12,6 +12,7 @@ one). Read the relevant ones before changing fonts, colours or key handling.
 ```bash
 make test          # unit tests (key mapping, palette, cell hit-testing)
 make check         # tests + clippy -D warnings
+make bench         # event-loop throughput on cat of big files (release); run on master to compare
 make run           # run it (your login shell)
 make screenshot    # docs/screenshot-*.png, running scripts/demo.sh in a throwaway config dir
 make icons         # assets/teleprinter-icon-128.png from packaging/linux/teleprinter.svg (via resvg)
