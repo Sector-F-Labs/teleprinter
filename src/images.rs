@@ -11,7 +11,7 @@
 //! Kitty's queries are answered from the filter (it writes to the pty), which
 //! is how programs find out the terminal can do graphics.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -31,8 +31,9 @@ pub const PLACEHOLDER: u32 = 0x10EE00;
 const MAX_SEQUENCE: usize = 48 << 20;
 /// What a pane's images may take as pixels (RGBA) before the oldest are dropped.
 const TEXTURE_BUDGET: usize = 256 << 20;
-/// Most images kept for a later kitty `a=p`.
+/// Most images, and bytes of them, kept for a later kitty `a=p`.
 const MAX_STORED: usize = 64;
+const STORED_BUDGET: usize = 64 << 20;
 
 /// The id an image's cells carry, as a foreground colour.
 pub fn id_color(id: u32) -> [u8; 3] {
@@ -57,6 +58,14 @@ enum Source {
 }
 
 impl Source {
+    /// What it takes in memory as sent.
+    fn len(&self) -> usize {
+        match self {
+            Source::Encoded(bytes) => bytes.len(),
+            Source::Rgba { data, .. } => data.len(),
+        }
+    }
+
     fn size(&self) -> Option<(u32, u32)> {
         match self {
             Source::Rgba { width, height, .. } => Some((*width, *height)),
@@ -120,6 +129,8 @@ struct Entry {
     rows: u32,
     kitty: Option<u32>,
     texture: Option<TextureHandle>,
+    /// The pixels couldn't be decoded: not tried again.
+    failed: bool,
 }
 
 impl Images {
@@ -140,7 +151,7 @@ impl Images {
         for event in shared.events.lock().unwrap().drain(..) {
             match event {
                 ImageEvent::Add { id, source, cols, rows, kitty, bytes } => {
-                    self.entries.insert(id, Entry { bytes, source: Some(source), cols, rows, kitty, texture: None });
+                    self.entries.insert(id, Entry { bytes, source: Some(source), cols, rows, kitty, texture: None, failed: false });
                     self.trim();
                 }
                 ImageEvent::Delete { cutoff, kitty } => {
@@ -154,18 +165,24 @@ impl Images {
     /// was deleted, which leaves its cells blank.
     pub fn texture(&mut self, ctx: &egui::Context, id: u32) -> Option<(TextureHandle, u32, u32)> {
         let e = self.entries.get_mut(&id)?;
+        if e.failed {
+            return None;
+        }
         if e.texture.is_none() {
-            let color = match &**e.source.as_ref()? {
+            let color = e.source.take().and_then(|source| match &*source {
                 Source::Encoded(bytes) => {
                     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
-                    ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw())
+                    Some(ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw()))
                 }
                 Source::Rgba { width, height, data } => {
-                    ColorImage::from_rgba_unmultiplied([*width as usize, *height as usize], data)
+                    Some(ColorImage::from_rgba_unmultiplied([*width as usize, *height as usize], data))
                 }
+            });
+            let Some(color) = color else {
+                e.failed = true;
+                return None;
             };
             e.texture = Some(ctx.load_texture(format!("inline-image-{id}"), color, TextureOptions::LINEAR));
-            e.source = None;
         }
         Some((e.texture.clone()?, e.cols, e.rows))
     }
@@ -181,7 +198,7 @@ pub struct ImagePty {
 impl ImagePty {
     pub fn new(inner: Pty, shared: Arc<Shared>) -> io::Result<Self> {
         let file = inner.file().try_clone()?;
-        Ok(Self { inner, reader: Filter::new(file, shared.clone()), shared })
+        Ok(Self { inner, reader: Filter::new(file, shared.clone())?, shared })
     }
 }
 
@@ -190,12 +207,17 @@ impl EventedReadWrite for ImagePty {
     type Writer = File;
 
     unsafe fn register(&mut self, p: &Arc<Poller>, e: Event, m: PollMode) -> io::Result<()> {
-        unsafe { self.inner.register(p, e, m) }
+        unsafe {
+            self.inner.register(p, e, m)?;
+            // The wake pipe reports under the pty's own key, so the loop reads the pty for it.
+            p.add_with_mode(&self.reader.wake.read, Event::readable(e.key), PollMode::Level)
+        }
     }
     fn reregister(&mut self, p: &Arc<Poller>, e: Event, m: PollMode) -> io::Result<()> {
         self.inner.reregister(p, e, m)
     }
     fn deregister(&mut self, p: &Arc<Poller>) -> io::Result<()> {
+        let _ = p.delete(&self.reader.wake.read);
         self.inner.deregister(p)
     }
     fn reader(&mut self) -> &mut Filter {
@@ -236,47 +258,100 @@ fn num(keys: &Keys, key: u8) -> Option<u32> {
     keys.get(&key)?.parse().ok()
 }
 
+/// A pipe that makes the event loop's poller report the pty readable while output is
+/// waiting in the filter. The kernel's buffer may be empty by then, and alacritty's
+/// loop would sleep on it with the rest of the output unread.
+struct Wake {
+    read: File,
+    write: File,
+    signaled: bool,
+}
+
+impl Wake {
+    fn new() -> io::Result<Self> {
+        use std::os::fd::FromRawFd;
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe2 fills `fds` with two new descriptors, which the Files then own.
+        unsafe {
+            if libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { read: File::from_raw_fd(fds[0]), write: File::from_raw_fd(fds[1]), signaled: false })
+        }
+    }
+
+    fn set(&mut self, on: bool) {
+        if on && !self.signaled {
+            let _ = (&self.write).write(&[1]);
+            self.signaled = true;
+        } else if !on && self.signaled {
+            let mut byte = [0u8; 16];
+            let _ = (&self.read).read(&mut byte);
+            self.signaled = false;
+        }
+    }
+}
+
 /// Reads the pty, passing everything but image sequences through.
 pub struct Filter {
     file: File,
     shared: Arc<Shared>,
-    /// Read but not yet scanned: a sequence that may still be arriving.
-    raw: Vec<u8>,
-    out: VecDeque<u8>,
+    wake: Wake,
+    /// The start of a sequence that may still be arriving, from its ESC on.
+    pending: Vec<u8>,
+    /// How much of `pending` was already searched for its end.
+    searched: usize,
+    /// Filtered output, and how much of it the event loop has taken.
+    out: Vec<u8>,
+    out_pos: usize,
     /// An iTerm2 multipart image (what `imgcat` sends): its parameters and the base64 so far.
     multipart: Option<(Vec<u8>, Vec<u8>)>,
     /// A kitty transfer in chunks: the first chunk's keys and the base64 so far.
     chunked: Option<(Keys, Vec<u8>)>,
-    /// Images sent with an id, for a later `a=p`.
-    stored: HashMap<u32, Arc<Source>>,
+    /// Images sent with an id, for a later `a=p`, oldest first, and what they add up to.
+    stored: Vec<(u32, Arc<Source>)>,
+    stored_bytes: usize,
 }
 
 impl Filter {
-    fn new(file: File, shared: Arc<Shared>) -> Self {
-        Self {
+    fn new(file: File, shared: Arc<Shared>) -> io::Result<Self> {
+        Ok(Self {
             file,
             shared,
-            raw: Vec::new(),
-            out: VecDeque::new(),
+            wake: Wake::new()?,
+            pending: Vec::new(),
+            searched: 0,
+            out: Vec::new(),
+            out_pos: 0,
             multipart: None,
             chunked: None,
-            stored: HashMap::new(),
-        }
+            stored: Vec::new(),
+            stored_bytes: 0,
+        })
     }
 
-    /// Moves what's complete in `raw` to `out`; `eof` flushes the rest.
-    fn scan(&mut self, eof: bool) {
-        let raw = std::mem::take(&mut self.raw);
+    /// Scans `bytes`, after the held-back start of a sequence if there is one, and
+    /// puts what's complete on `out`. `eof` flushes what's held.
+    fn feed(&mut self, bytes: &[u8], eof: bool) {
+        let mut data = std::mem::take(&mut self.pending);
+        data.extend_from_slice(bytes);
+        let pos = self.process(&data, eof);
+        // Nothing consumed: the whole of it is one unfinished sequence, kept as it is.
+        self.pending = if pos == 0 { data } else { data[pos..].to_vec() };
+        self.searched = self.pending.len();
+    }
+
+    /// Returns how much of `data` was dealt with; the rest is a sequence still arriving.
+    fn process(&mut self, data: &[u8], eof: bool) -> usize {
         let mut pos = 0;
-        while pos < raw.len() {
-            let Some(esc) = raw[pos..].iter().position(|&b| b == 0x1b).map(|i| pos + i) else {
-                self.out.extend(&raw[pos..]);
-                pos = raw.len();
-                break;
+        while pos < data.len() {
+            let Some(esc) = data[pos..].iter().position(|&b| b == 0x1b).map(|i| pos + i) else {
+                self.out.extend_from_slice(&data[pos..]);
+                return data.len();
             };
-            self.out.extend(&raw[pos..esc]);
+            self.out.extend_from_slice(&data[pos..esc]);
             pos = esc;
-            let rest = &raw[esc..];
+            let rest = &data[esc..];
             let prefix = if rest.starts_with(OSC) {
                 Some(OSC)
             } else if rest.starts_with(APC) {
@@ -285,36 +360,72 @@ impl Filter {
                 None
             };
             match prefix {
-                Some(prefix) => match terminator(rest, prefix) {
-                    Some((payload_end, end)) => {
-                        let body = &rest[prefix.len()..payload_end];
-                        let replacement = if prefix == OSC { self.osc(body) } else { Some(self.apc(body)) };
-                        match replacement {
-                            Some(replacement) => self.out.extend(replacement),
-                            // Some other OSC 1337: the terminal's to ignore.
-                            None => self.out.extend(&rest[..end]),
+                Some(prefix) => {
+                    // Only the held-back sequence, at the start of the data, was searched before.
+                    let from = if esc == 0 { self.searched } else { 0 };
+                    match terminator(rest, prefix, from) {
+                        Some((payload_end, end)) => {
+                            let body = &rest[prefix.len()..payload_end];
+                            let replacement = if prefix == OSC { self.osc(body) } else { Some(self.apc(body)) };
+                            match replacement {
+                                Some(replacement) => self.out.extend(replacement),
+                                // Some other OSC 1337: the terminal's to ignore.
+                                None => self.out.extend_from_slice(&rest[..end]),
+                            }
+                            pos = esc + end;
                         }
-                        pos = esc + end;
+                        None if rest.len() > MAX_SEQUENCE => {
+                            // Too big to be one: let it through as text.
+                            self.out.push(0x1b);
+                            pos += 1;
+                        }
+                        None if eof => {
+                            self.out.extend_from_slice(rest);
+                            return data.len();
+                        }
+                        None => return pos,
                     }
-                    None if rest.len() > MAX_SEQUENCE => {
-                        // Too big to be one: let it through as text.
-                        self.out.push_back(0x1b);
-                        pos += 1;
-                    }
-                    None if eof => {
-                        self.out.extend(rest);
-                        pos = raw.len();
-                    }
-                    None => break,
-                },
-                None if !eof && (OSC.starts_with(rest) || APC.starts_with(rest)) => break,
+                }
+                None if !eof && (OSC.starts_with(rest) || APC.starts_with(rest)) => return pos,
                 None => {
-                    self.out.push_back(0x1b);
+                    self.out.push(0x1b);
                     pos += 1;
                 }
             }
         }
-        self.raw = raw[pos..].to_vec();
+        pos
+    }
+
+    /// Hands the event loop what's waiting in `out`, as much as fits.
+    fn take_out(&mut self, buf: &mut [u8]) -> usize {
+        let n = buf.len().min(self.out.len() - self.out_pos);
+        buf[..n].copy_from_slice(&self.out[self.out_pos..self.out_pos + n]);
+        self.out_pos += n;
+        n
+    }
+
+    fn fill(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.out_pos < self.out.len() {
+            return Ok(self.take_out(buf));
+        }
+        self.out.clear();
+        self.out_pos = 0;
+        loop {
+            let n = self.file.read(buf)?;
+            if n == 0 {
+                self.feed(&[], true);
+                return Ok(self.take_out(buf));
+            }
+            // Plain output goes straight through, untouched.
+            if self.pending.is_empty() && !buf[..n].contains(&0x1b) {
+                return Ok(n);
+            }
+            let input = buf[..n].to_vec();
+            self.feed(&input, false);
+            if self.out_pos < self.out.len() {
+                return Ok(self.take_out(buf));
+            }
+        }
     }
 
     /// What an OSC 1337 body becomes: `None` if it isn't about images.
@@ -413,10 +524,7 @@ impl Filter {
                 Ok(source) => {
                     let source = Arc::new(source);
                     if let Some(id) = id {
-                        if self.stored.len() >= MAX_STORED {
-                            self.stored.clear();
-                        }
-                        self.stored.insert(id, source.clone());
+                        self.store(id, source.clone());
                     }
                     self.reply(&keys, Ok(()));
                     if action == 'T' { self.display(source, &keys, id) } else { Vec::new() }
@@ -426,7 +534,7 @@ impl Filter {
                     Vec::new()
                 }
             },
-            'p' => match id.and_then(|id| self.stored.get(&id).cloned()) {
+            'p' => match id.and_then(|id| self.stored.iter().find(|(k, _)| *k == id).map(|(_, s)| s.clone())) {
                 Some(source) => {
                     self.reply(&keys, Ok(()));
                     self.display(source, &keys, id)
@@ -448,15 +556,24 @@ impl Filter {
                     _ => return Vec::new(),
                 };
                 if what.chars().all(|c| c.is_ascii_uppercase()) {
-                    match kitty {
-                        Some(k) => drop(self.stored.remove(&k)),
-                        None => self.stored.clear(),
-                    }
+                    self.stored.retain(|(k, _)| kitty.is_some_and(|id| *k != id));
+                    self.stored_bytes = self.stored.iter().map(|(_, s)| s.len()).sum();
                 }
                 self.shared.events.lock().unwrap().push(ImageEvent::Delete { cutoff, kitty });
                 Vec::new()
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Keeps an image for a later `a=p`, within `STORED_BUDGET`: the oldest go first.
+    fn store(&mut self, id: u32, source: Arc<Source>) {
+        self.stored.retain(|(k, _)| *k != id);
+        self.stored.push((id, source));
+        self.stored_bytes = self.stored.iter().map(|(_, s)| s.len()).sum();
+        while self.stored.len() > 1 && (self.stored.len() > MAX_STORED || self.stored_bytes > STORED_BUDGET) {
+            let (_, oldest) = self.stored.remove(0);
+            self.stored_bytes -= oldest.len();
         }
     }
 
@@ -472,12 +589,7 @@ impl Filter {
             "d" => decode(data)?,
             "f" | "t" => {
                 let path = String::from_utf8(decode(data)?).map_err(|_| "EINVAL:bad path".to_string())?;
-                let bytes = std::fs::read(&path).map_err(|e| format!("ENOENT:{e}"))?;
-                // A temporary file is the terminal's to delete, if it's marked as one.
-                if medium == "t" && path.contains("tty-graphics-protocol") {
-                    let _ = std::fs::remove_file(&path);
-                }
-                bytes
+                read_image_file(std::path::Path::new(&path), medium == "t")?
             }
             _ => return Err("EINVAL:only direct and file transmission are supported".into()),
         };
@@ -540,6 +652,10 @@ impl Filter {
     /// was when `keep_cursor`.
     fn place(&self, source: Arc<Source>, kitty: Option<u32>, width: &str, height: &str, keep_aspect: bool, keep_cursor: bool) -> Vec<u8> {
         let Some((px_w, px_h)) = source.size() else { return Vec::new() };
+        // A small file can claim a huge picture; its texture would be bigger than we keep.
+        if px_w as usize * px_h as usize * 4 > TEXTURE_BUDGET {
+            return Vec::new();
+        }
         let columns = self.shared.columns.load(Ordering::Relaxed).max(1);
         let cell_w = self.shared.cell_w.load(Ordering::Relaxed).max(1) as f32;
         let cell_h = self.shared.cell_h.load(Ordering::Relaxed).max(1) as f32;
@@ -568,6 +684,38 @@ impl Filter {
         out.extend(if keep_cursor { &b"\x1b8"[..] } else { &b"\x1b[39m"[..] });
         out
     }
+}
+
+/// The contents of a file a program named, for kitty's `t=f` and `t=t`. Only a regular
+/// file outside /proc, /sys and /dev, of a size we'd take: anything else (a device that
+/// never ends, a pipe that never answers) would hang or fill the pty thread. A temporary
+/// file (`t=t`) is the terminal's to delete, but only in the temp directory and when
+/// named for the protocol.
+fn read_image_file(path: &std::path::Path, temporary: bool) -> Result<Vec<u8>, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let real = path.canonicalize().map_err(|_| "ENOENT:no such file".to_string())?;
+    if ["/proc", "/sys", "/dev"].iter().any(|dir| real.starts_with(dir)) {
+        return Err("EPERM:not a place to read images from".into());
+    }
+    // Non-blocking, so opening a pipe doesn't wait for a writer.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&real)
+        .map_err(|_| "ENOENT:can't open the file".to_string())?;
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return Err("EBADF:not a regular file".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SEQUENCE as u64 + 1).read_to_end(&mut bytes).map_err(|_| "EIO:can't read the file".to_string())?;
+    if bytes.len() > MAX_SEQUENCE {
+        return Err("EFBIG:file too big".into());
+    }
+    let named_for_it = real.to_string_lossy().contains("tty-graphics-protocol");
+    if temporary && named_for_it && real.starts_with(std::env::temp_dir()) {
+        let _ = std::fs::remove_file(&real);
+    }
+    Ok(bytes)
 }
 
 /// A size parameter: `N` cells, `Npx`, `N%` of `total` cells, or auto.
@@ -607,9 +755,10 @@ fn fit(px_w: f32, px_h: f32, cell_w: f32, cell_h: f32, columns: u32, width: &str
 }
 
 /// Where the payload ends and the whole sequence ends, if all of it is here.
-/// OSC ends with BEL or ESC \; APC only with ESC \.
-fn terminator(seq: &[u8], prefix: &[u8]) -> Option<(usize, usize)> {
-    (prefix.len()..seq.len()).find_map(|i| match seq[i] {
+/// OSC ends with BEL or ESC \; APC only with ESC \. `from` is how far an earlier try got.
+fn terminator(seq: &[u8], prefix: &[u8], from: usize) -> Option<(usize, usize)> {
+    // One back: the ESC of an ST may have been the last byte then.
+    (prefix.len().max(from.saturating_sub(1))..seq.len()).find_map(|i| match seq[i] {
         0x07 if prefix == OSC => Some((i, i + 1)),
         0x1b if seq.get(i + 1) == Some(&b'\\') => Some((i, i + 2)),
         _ => None,
@@ -618,25 +767,11 @@ fn terminator(seq: &[u8], prefix: &[u8]) -> Option<(usize, usize)> {
 
 impl Read for Filter {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut tmp = [0u8; 65536];
-        while self.out.is_empty() {
-            match self.file.read(&mut tmp) {
-                Ok(0) => {
-                    self.scan(true);
-                    break;
-                }
-                Ok(n) => {
-                    self.raw.extend_from_slice(&tmp[..n]);
-                    self.scan(false);
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        let n = buf.len().min(self.out.len());
-        for (slot, byte) in buf.iter_mut().zip(self.out.drain(..n)) {
-            *slot = byte;
-        }
-        Ok(n)
+        let result = self.fill(buf);
+        // Output that didn't fit waits for the next call; see `Wake`.
+        let waiting = self.out_pos < self.out.len();
+        self.wake.set(waiting);
+        result
     }
 }
 
@@ -648,14 +783,14 @@ mod tests {
     const SIZE: WindowSize = WindowSize { num_cols: 80, num_lines: 24, cell_width: 8, cell_height: 16 };
 
     fn filter(shared: Arc<Shared>) -> Filter {
-        Filter::new(File::open("/dev/null").unwrap(), shared)
+        Filter::new(File::open("/dev/null").unwrap(), shared).unwrap()
     }
 
     /// A filter whose pty is one end of a socket pair: the other end hears the replies.
     fn talking(shared: Arc<Shared>) -> (Filter, UnixStream) {
         let (a, b) = UnixStream::pair().unwrap();
         b.set_nonblocking(true).unwrap();
-        (Filter::new(File::from(std::os::fd::OwnedFd::from(a)), shared), b)
+        (Filter::new(File::from(std::os::fd::OwnedFd::from(a)), shared).unwrap(), b)
     }
 
     fn png() -> String {
@@ -667,7 +802,7 @@ mod tests {
     }
 
     fn out(f: &Filter) -> String {
-        String::from_utf8(f.out.iter().copied().collect()).unwrap()
+        String::from_utf8(f.out[f.out_pos..].to_vec()).unwrap()
     }
 
     fn events(shared: &Shared) -> usize {
@@ -678,8 +813,7 @@ mod tests {
     fn an_image_becomes_placeholder_rows_and_text_passes() {
         let shared = Shared::new(SIZE);
         let mut f = filter(shared.clone());
-        f.raw.extend_from_slice(format!("a\x1b[1mb\x1b]1337;File=inline=1:{}\x07c", png()).as_bytes());
-        f.scan(false);
+        f.feed(format!("a\x1b[1mb\x1b]1337;File=inline=1:{}\x07c", png()).as_bytes(), false);
         let out = out(&f);
         assert!(out.starts_with("a\x1b[1mb\x1b[38;2;0;0;1m"));
         assert!(out.ends_with("\x1b[39mc"));
@@ -695,11 +829,9 @@ mod tests {
         let mut f = filter(shared);
         let seq = format!("\x1b]1337;File=inline=1:{}\x07", png());
         let (a, b) = seq.split_at(20);
-        f.raw.extend_from_slice(a.as_bytes());
-        f.scan(false);
+        f.feed(a.as_bytes(), false);
         assert!(f.out.is_empty());
-        f.raw.extend_from_slice(b.as_bytes());
-        f.scan(false);
+        f.feed(b.as_bytes(), false);
         assert!(!f.out.is_empty());
     }
 
@@ -712,8 +844,7 @@ mod tests {
         let text = format!(
             "\x1b]1337;MultipartFile=inline=1;size=9\x07\x1b]1337;FilePart={a}\x07\x1b]1337;FilePart={b}\x07\x1b]1337;FileEnd\x07x"
         );
-        f.raw.extend_from_slice(text.as_bytes());
-        f.scan(false);
+        f.feed(text.as_bytes(), false);
         let out = out(&f);
         assert_eq!(out.matches('\u{10EE00}').count(), 2);
         assert!(out.ends_with("\x1b[39mx"));
@@ -724,8 +855,7 @@ mod tests {
     fn other_escapes_pass_through() {
         let shared = Shared::new(SIZE);
         let mut f = filter(shared);
-        f.raw.extend_from_slice(b"\x1b[31mred\x1b]0;title\x07\x1b_Xother\x1b\\");
-        f.scan(false);
+        f.feed(b"\x1b[31mred\x1b]0;title\x07\x1b_Xother\x1b\\", false);
         assert_eq!(out(&f), "\x1b[31mred\x1b]0;title\x07\x1b_Xother\x1b\\");
     }
 
@@ -738,8 +868,7 @@ mod tests {
     #[test]
     fn a_kitty_query_is_answered() {
         let (mut f, mut peer) = talking(Shared::new(SIZE));
-        f.raw.extend_from_slice(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c");
-        f.scan(false);
+        f.feed(b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c", false);
         // Nothing is drawn, and the device attributes request still reaches the terminal.
         assert_eq!(out(&f), "\x1b[c");
         let mut reply = String::new();
@@ -753,8 +882,7 @@ mod tests {
         let (mut f, mut peer) = talking(shared.clone());
         let data = png();
         let (a, b) = data.split_at(data.len() / 2);
-        f.raw.extend_from_slice(format!("\x1b_Ga=T,f=100,i=7,m=1;{a}\x1b\\\x1b_Gm=0;{b}\x1b\\x").as_bytes());
-        f.scan(false);
+        f.feed(format!("\x1b_Ga=T,f=100,i=7,m=1;{a}\x1b\\\x1b_Gm=0;{b}\x1b\\x").as_bytes(), false);
         let out = out(&f);
         assert_eq!(out.matches('\u{10EE00}').count(), 2);
         assert!(out.ends_with("\x1b[39mx"));
@@ -768,8 +896,7 @@ mod tests {
     fn q_2_keeps_quiet_and_c_1_keeps_the_cursor() {
         let shared = Shared::new(SIZE);
         let (mut f, mut peer) = talking(shared);
-        f.raw.extend_from_slice(format!("\x1b_Ga=T,f=100,i=7,q=2,C=1,c=3,r=2;{}\x1b\\", png()).as_bytes());
-        f.scan(false);
+        f.feed(format!("\x1b_Ga=T,f=100,i=7,q=2,C=1,c=3,r=2;{}\x1b\\", png()).as_bytes(), false);
         let out = out(&f);
         assert!(out.starts_with("\x1b7\x1b[38;2;0;0;1m"));
         assert!(out.contains("\x1b[3D\x1b[B"));
@@ -783,9 +910,8 @@ mod tests {
     fn raw_pixels_and_errors() {
         let (mut f, mut peer) = talking(Shared::new(SIZE));
         let rgb = base64::engine::general_purpose::STANDARD.encode([0u8; 2 * 2 * 3]);
-        f.raw.extend_from_slice(format!("\x1b_Ga=T,f=24,s=2,v=2,i=1;{rgb}\x1b\\").as_bytes());
-        f.raw.extend_from_slice(format!("\x1b_Ga=T,f=24,s=3,v=3,i=2;{rgb}\x1b\\").as_bytes());
-        f.scan(false);
+        f.feed(format!("\x1b_Ga=T,f=24,s=2,v=2,i=1;{rgb}\x1b\\").as_bytes(), false);
+        f.feed(format!("\x1b_Ga=T,f=24,s=3,v=3,i=2;{rgb}\x1b\\").as_bytes(), false);
         assert_eq!(out(&f).matches('\u{10EE00}').count(), 1);
         let mut reply = String::new();
         peer.read_to_string(&mut reply).ok();
@@ -796,8 +922,7 @@ mod tests {
     fn deleting_removes_the_images_up_to_then() {
         let shared = Shared::new(SIZE);
         let mut f = filter(shared.clone());
-        f.raw.extend_from_slice(format!("\x1b_Ga=T,f=100,i=1;{p}\x1b\\\x1b_Ga=d,d=A\x1b\\\x1b_Ga=T,f=100,i=1;{p}\x1b\\", p = png()).as_bytes());
-        f.scan(false);
+        f.feed(format!("\x1b_Ga=T,f=100,i=1;{p}\x1b\\\x1b_Ga=d,d=A\x1b\\\x1b_Ga=T,f=100,i=1;{p}\x1b\\", p = png()).as_bytes(), false);
         let mut images = Images::default();
         images.take(&shared);
         // The first is gone; the one drawn after the delete stays.
@@ -809,9 +934,8 @@ mod tests {
         let shared = Shared::new(SIZE);
         let mut f = filter(shared.clone());
         for _ in 0..4 {
-            f.raw.extend_from_slice(format!("\x1b]1337;File=inline=1:{}\x07", png()).as_bytes());
+            f.feed(format!("\x1b]1337;File=inline=1:{}\x07", png()).as_bytes(), false);
         }
-        f.scan(false);
         let mut images = Images::with_budget(budget);
         images.take(&shared);
         images.entries.keys().copied().collect()
@@ -829,9 +953,105 @@ mod tests {
     fn a_kitty_put_shows_a_stored_image_again() {
         let shared = Shared::new(SIZE);
         let mut f = filter(shared.clone());
-        f.raw.extend_from_slice(format!("\x1b_Ga=t,f=100,i=5;{}\x1b\\\x1b_Ga=p,i=5\x1b\\", png()).as_bytes());
-        f.scan(false);
+        f.feed(format!("\x1b_Ga=t,f=100,i=5;{}\x1b\\\x1b_Ga=p,i=5\x1b\\", png()).as_bytes(), false);
         assert_eq!(events(&shared), 1);
         assert_eq!(out(&f).matches('\u{10EE00}').count(), 2);
+    }
+
+    #[test]
+    fn only_regular_files_are_read() {
+        let dir = std::env::temp_dir().join(format!("tp-images-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.png");
+        std::fs::write(&file, b"data").unwrap();
+        assert_eq!(read_image_file(&file, false).unwrap(), b"data");
+        // Not deleted: not marked as the protocol's temporary file.
+        assert!(file.exists());
+        assert!(read_image_file(std::path::Path::new("/dev/zero"), false).is_err());
+        assert!(read_image_file(std::path::Path::new("/proc/self/environ"), false).is_err());
+        assert!(read_image_file(&dir, false).is_err());
+        let fifo = dir.join("pipe");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(read_image_file(&fifo, false).is_err());
+        let marked = dir.join("tty-graphics-protocol-x");
+        std::fs::write(&marked, b"data").unwrap();
+        assert!(read_image_file(&marked, true).is_ok());
+        assert!(!marked.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plain_output_passes_straight_through() {
+        let (mut f, peer) = talking(Shared::new(SIZE));
+        (&peer).write_all(b"hello\r\nworld").unwrap();
+        let mut buf = [0u8; 64];
+        let n = f.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"hello\r\nworld");
+        assert!(!f.wake.signaled);
+    }
+
+    #[test]
+    fn output_that_didnt_fit_wakes_the_loop_until_it_is_read() {
+        let (mut f, peer) = talking(Shared::new(SIZE));
+        (&peer).write_all(format!("\x1b]1337;File=inline=1:{}\x07", png()).as_bytes()).unwrap();
+        let mut small = [0u8; 10];
+        let mut got = Vec::new();
+        let n = f.read(&mut small).unwrap();
+        got.extend_from_slice(&small[..n]);
+        // The rest of the placeholder cells wait, and the poller is told.
+        assert!(f.wake.signaled);
+        while f.wake.signaled {
+            let n = f.read(&mut small).unwrap();
+            got.extend_from_slice(&small[..n]);
+        }
+        assert_eq!(String::from_utf8(got).unwrap().matches('\u{10EE01}').count(), 2);
+    }
+
+    #[test]
+    fn a_big_sequence_in_small_pieces_is_found_without_rescanning() {
+        let shared = Shared::new(SIZE);
+        let mut f = filter(shared.clone());
+        let seq = format!("\x1b]1337;File=inline=1:{}\x1b\\", png());
+        // Split the ST itself between two pieces, and feed a byte at a time before that.
+        let bytes = seq.as_bytes();
+        for chunk in bytes[..bytes.len() - 1].chunks(7) {
+            f.feed(chunk, false);
+            assert!(out(&f).is_empty());
+        }
+        f.feed(&bytes[bytes.len() - 1..], false);
+        assert_eq!(out(&f).matches('\u{10EE00}').count(), 2);
+        assert!(f.pending.is_empty());
+    }
+
+    #[test]
+    fn an_image_that_wont_decode_is_given_up_on() {
+        let shared = Shared::new(SIZE);
+        let mut f = filter(shared.clone());
+        let good = base64::engine::general_purpose::STANDARD.decode(png()).unwrap();
+        // A real header, cut off before the end of the pixels.
+        let bad = base64::engine::general_purpose::STANDARD.encode(&good[..good.len() - 15]);
+        f.feed(format!("\x1b]1337;File=inline=1:{bad}\x07").as_bytes(), false);
+        let mut images = Images::default();
+        images.take(&shared);
+        let ctx = egui::Context::default();
+        assert!(images.texture(&ctx, 1).is_none());
+        assert!(images.entries[&1].failed);
+        assert!(images.entries[&1].source.is_none());
+        assert!(images.texture(&ctx, 1).is_none());
+    }
+
+    #[test]
+    fn stored_images_are_kept_within_a_budget() {
+        let mut f = filter(Shared::new(SIZE));
+        let big = || Arc::new(Source::Rgba { width: 1, height: 1, data: vec![0u8; 40 << 20] });
+        f.store(1, big());
+        f.store(2, big());
+        assert_eq!(f.stored.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![2]);
+        for id in 10..100 {
+            f.store(id, Arc::new(Source::Rgba { width: 1, height: 1, data: vec![0; 4] }));
+        }
+        assert_eq!(f.stored.len(), MAX_STORED);
+        assert_eq!(f.stored_bytes, f.stored.iter().map(|(_, s)| s.len()).sum::<usize>());
     }
 }

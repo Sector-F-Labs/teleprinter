@@ -39,11 +39,19 @@ programs find that graphics work. Sixel is not supported.
 
 - yazi, chafa (`-f kitty`) and `imgcat` show real images; yazi needs no `TERM_PROGRAM` trick.
 - No change to alacritty_terminal, but every byte the shell writes now passes through our
-  scanner. Big `cat` output takes about as long as before.
+  scanner. Output with no escape in it is read straight into the event loop's buffer; otherwise
+  it's copied once to be scanned. A big `cat` took about as long as before (checked by hand, on
+  the first version of the filter).
+- Output left over when the event loop's buffer is full would sit unseen, as the pty has nothing
+  more to say: a pipe in the same poller wakes the loop until it has been read.
 - An image is the cells it left: text written over some of them cuts it, and selecting across it
   copies the placeholder characters. Cells are limited to 256 rows an image.
 - Kitty's cropping, shared-memory transfer and unicode placeholders are not handled. Delete
   removes images in the scrollback too, where kitty only removes visible ones.
+- Kitty's file transfer (`t=f`, `t=t`) reads only regular files, not under /proc, /sys or /dev, of
+  at most 48 MB. A temporary file is deleted only in the temp directory and when named for the
+  protocol. Images that claim more than 256 MB of pixels are refused.
+- Images kept for a later kitty `a=p` are capped at 64 MB and 64 images, oldest first.
 - A pane keeps at most 256 MB of image pixels; past that the oldest images are dropped and their
   cells go blank, even if still on screen. Images are not freed when they scroll out of the history.
 - Inside tmux, `imgcat` doesn't work: it needs tmux's passthrough wrapper (DCS `tmux;`).
