@@ -42,6 +42,10 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_TABS=3`
   draw colour glyphs; `view::emoji_at` joins the cells of a ZWJ sequence, skin tone or flag (ADR-0013).
 - `src/boxdraw.rs`: box drawing, block elements and Powerline triangles drawn from rectangles inside
   the cell, since the font's are taller than it (ADR-0015).
+- `src/images.rs`: inline images (iTerm2 `imgcat`, kitty graphics: yazi, chafa). The pty is wrapped so
+  its output is filtered; an image leaves placeholder cells (row in the character, id in the
+  foreground) that `view.rs` paints as texture slices; kitty queries are answered on the pty
+  (ADR-0017).
 - `src/drop.rs`: files dropped on the window, typed into the pane under them as shell-quoted
   paths (so Claude Code attaches images); a Wayland data device of our own on winit's connection,
   since winit 0.30 has no Wayland drops (ADR-0014).

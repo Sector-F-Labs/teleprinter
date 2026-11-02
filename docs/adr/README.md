@@ -58,6 +58,7 @@ mechanics of adding one.
 | [0014](0014-dropped-files-type-their-paths.md) | Dropped files type their paths, with our own Wayland drop target | Accepted |
 | [0015](0015-box-and-block-glyphs-drawn-in-the-cell.md) | Box drawing and block glyphs drawn in the cell | Accepted |
 | [0016](0016-braille-scan-lines-and-sextants-drawn-in-the-cell.md) | Braille, scan lines and sextants drawn in the cell | Accepted |
+| [0017](0017-inline-images-as-placeholder-cells.md) | Inline images as placeholder cells, from a filtered pty | Proposed |
 
 ## Decision Relationship
 
@@ -80,6 +81,8 @@ flowchart TD
     D --> N[0014: dropped files type their paths]
     B --> O[0015: box and block glyphs drawn in the cell]
     O --> P[0016: braille, scan lines and sextants drawn in the cell]
+    A --> Q[0017: inline images as placeholder cells]
+    M --> Q
 ```
 
 ## Revisit Triggers
@@ -92,5 +95,7 @@ flowchart TD
   ([0002](0002-bundle-meslolgs-nf.md)).
 - A second app wants an ANSI palette (e.g. a log viewer): move the palette keys into Patina's shared
   skin format ([0003](0003-terminal-colours-come-from-the-skin.md)).
+- Sixel is wanted, or alacritty_terminal gains a hook for the pty bytes: revisit the wrapped pty
+  ([0017](0017-inline-images-as-placeholder-cells.md)).
 - Agents want to type into panes they didn't open, or clean up what they opened: revisit
   `send-text` and pane ownership ([0009](0009-control-socket-for-scripts-and-agents.md)).
