@@ -260,3 +260,101 @@ mod tests {
         assert_eq!(title(&fg("ssh", None), home), "ssh");
     }
 }
+
+/// Throughput of the real event loop on a pty (`make bench`): `cat` of generated files,
+/// with and without a thread holding the terminal lock the way painting does. Run in
+/// release; compares a build against another by running it on each.
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::io::Write;
+
+    const PNG_1X1: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const MB: usize = 1 << 20;
+
+    fn make(path: &std::path::Path, mut line: impl FnMut(usize) -> Vec<u8>, bytes: usize) {
+        let mut f = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
+        let (mut n, mut i) = (0, 0);
+        while n < bytes {
+            let l = line(i);
+            f.write_all(&l).unwrap();
+            n += l.len();
+            i += 1;
+        }
+    }
+
+    /// Seconds for `cat path` to be read through to the end; `None` if it stalled.
+    fn run(path: &std::path::Path, painter: bool) -> Option<f64> {
+        let ctx = egui::Context::default();
+        let size = WindowSize { num_cols: 120, num_lines: 40, cell_width: 8, cell_height: 16 };
+        let session = Session::spawn(&ctx, Some(("cat".into(), vec![path.display().to_string()])), None, HashMap::new(), size)
+            .unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let term = session.term.clone();
+        let busy = painter.then(|| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    // Like a frame: hold the terminal for a moment, then let go.
+                    let _t = term.lock();
+                    std::thread::sleep(Duration::from_micros(800));
+                    drop(_t);
+                    std::thread::sleep(Duration::from_micros(1200));
+                }
+            })
+        });
+        let start = Instant::now();
+        let mut done = None;
+        while start.elapsed() < Duration::from_secs(120) {
+            match session.events.recv_timeout(Duration::from_millis(200)) {
+                Ok(Event::Exit) => {
+                    done = Some(start.elapsed().as_secs_f64());
+                    break;
+                }
+                _ => {}
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(b) = busy {
+            b.join().unwrap();
+        }
+        done
+    }
+
+    #[test]
+    #[ignore = "a benchmark: run with `make bench`"]
+    fn throughput() {
+        let dir = std::env::temp_dir().join(format!("tp-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("plain.txt");
+        let colour = dir.join("colour.txt");
+        let images = dir.join("images.txt");
+        let letters = b"abcdefghijklmnopqrstuvwxyz0123456789 ";
+        make(&plain, |i| (0..99).map(|j| letters[(i * 7 + j * 3) % letters.len()]).chain([b'\n']).collect(), 100 * MB);
+        make(
+            &colour,
+            |i| format!("\x1b[3{}mline {i}\x1b[0m \x1b[1;4{}mbold\x1b[0m some more text to fill the row out\n", i % 8, (i + 3) % 8).into_bytes(),
+            100 * MB,
+        );
+        make(&images, |i| format!("row {i}\x1b]1337;File=inline=1;width=1:{PNG_1X1}\x07\n").into_bytes(), 20 * MB);
+
+        println!("\n{:<28} {:>10} {:>10} {:>10}", "", "best", "median", "MB/s");
+        for (name, path, painter) in [
+            ("plain text", &plain, false),
+            ("plain text, UI contending", &plain, true),
+            ("colour (ESC every few bytes)", &colour, false),
+            ("colour, UI contending", &colour, true),
+            ("tiny images", &images, false),
+        ] {
+            let mb = std::fs::metadata(path).unwrap().len() as f64 / MB as f64;
+            let mut times: Vec<f64> = (0..3).filter_map(|_| run(path, painter)).collect();
+            if times.len() < 3 {
+                println!("{name:<28} STALLED ({} of 3 runs finished)", times.len());
+                continue;
+            }
+            times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!("{name:<28} {:>9.2}s {:>9.2}s {:>10.0}", times[0], times[1], mb / times[1]);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
