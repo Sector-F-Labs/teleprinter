@@ -44,6 +44,7 @@ programs find that graphics work. Sixel is not supported.
   copies the placeholder characters. Cells are limited to 256 rows an image.
 - Kitty's cropping, shared-memory transfer and unicode placeholders are not handled. Delete
   removes images in the scrollback too, where kitty only removes visible ones.
-- Textures are freed only on delete, so a long session full of images grows.
+- A pane keeps at most 256 MB of image pixels; past that the oldest images are dropped and their
+  cells go blank, even if still on screen. Images are not freed when they scroll out of the history.
 - Inside tmux, `imgcat` doesn't work: it needs tmux's passthrough wrapper (DCS `tmux;`).
 - Revisit if sixel is wanted, or if alacritty_terminal gains a hook for the pty bytes.

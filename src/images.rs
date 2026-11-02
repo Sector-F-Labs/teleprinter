@@ -11,7 +11,7 @@
 //! Kitty's queries are answered from the filter (it writes to the pty), which
 //! is how programs find out the terminal can do graphics.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,6 +29,8 @@ const APC: &[u8] = b"\x1b_G";
 pub const PLACEHOLDER: u32 = 0x10EE00;
 /// Largest sequence taken (base64 included); bigger ones are dropped.
 const MAX_SEQUENCE: usize = 48 << 20;
+/// What a pane's images may take as pixels (RGBA) before the oldest are dropped.
+const TEXTURE_BUDGET: usize = 256 << 20;
 /// Most images kept for a later kitty `a=p`.
 const MAX_STORED: usize = 64;
 
@@ -67,7 +69,7 @@ impl Source {
 
 /// What the pty thread tells the UI, in stream order.
 enum ImageEvent {
-    Add { id: u32, source: Arc<Source>, cols: u32, rows: u32, kitty: Option<u32> },
+    Add { id: u32, source: Arc<Source>, cols: u32, rows: u32, kitty: Option<u32>, bytes: usize },
     /// Images up to `cutoff` (the last id made) are gone, all or just kitty id `kitty`.
     Delete { cutoff: u32, kitty: Option<u32> },
 }
@@ -98,12 +100,21 @@ impl Shared {
 }
 
 /// Images of one pane, with their textures made on first paint.
-#[derive(Default)]
 pub struct Images {
-    entries: HashMap<u32, Entry>,
+    /// By id, so the oldest is first.
+    entries: BTreeMap<u32, Entry>,
+    budget: usize,
+}
+
+impl Default for Images {
+    fn default() -> Self {
+        Self::with_budget(TEXTURE_BUDGET)
+    }
 }
 
 struct Entry {
+    /// Its pixels as RGBA, what it costs once it's a texture.
+    bytes: usize,
     source: Option<Arc<Source>>,
     cols: u32,
     rows: u32,
@@ -112,11 +123,25 @@ struct Entry {
 }
 
 impl Images {
+    fn with_budget(budget: usize) -> Self {
+        Self { entries: BTreeMap::new(), budget }
+    }
+
+    /// Drops the oldest images until the rest fit the budget. The newest stays whatever its size.
+    fn trim(&mut self) {
+        let mut total: usize = self.entries.values().map(|e| e.bytes).sum();
+        while total > self.budget && self.entries.len() > 1 {
+            let (_, oldest) = self.entries.pop_first().unwrap();
+            total -= oldest.bytes;
+        }
+    }
+
     pub fn take(&mut self, shared: &Shared) {
         for event in shared.events.lock().unwrap().drain(..) {
             match event {
-                ImageEvent::Add { id, source, cols, rows, kitty } => {
-                    self.entries.insert(id, Entry { source: Some(source), cols, rows, kitty, texture: None });
+                ImageEvent::Add { id, source, cols, rows, kitty, bytes } => {
+                    self.entries.insert(id, Entry { bytes, source: Some(source), cols, rows, kitty, texture: None });
+                    self.trim();
                 }
                 ImageEvent::Delete { cutoff, kitty } => {
                     self.entries.retain(|&id, e| id > cutoff || kitty.is_some_and(|k| e.kitty != Some(k)));
@@ -520,7 +545,7 @@ impl Filter {
         let cell_h = self.shared.cell_h.load(Ordering::Relaxed).max(1) as f32;
         let (cols, rows) = fit(px_w as f32, px_h as f32, cell_w, cell_h, columns, width, height, keep_aspect);
         let id = (self.shared.last_id.fetch_add(1, Ordering::Relaxed) + 1) & 0xFF_FFFF;
-        self.shared.events.lock().unwrap().push(ImageEvent::Add { id, source, cols, rows, kitty });
+        self.shared.events.lock().unwrap().push(ImageEvent::Add { id, source, cols, rows, kitty, bytes: px_w as usize * px_h as usize * 4 });
 
         let [r, g, b] = id_color(id);
         // ESC 7 saves the colour with the cursor, so ESC 8 puts both back.
@@ -777,6 +802,27 @@ mod tests {
         images.take(&shared);
         // The first is gone; the one drawn after the delete stays.
         assert_eq!(images.entries.keys().copied().collect::<Vec<_>>(), vec![2]);
+    }
+
+    /// Four 2048-byte images (16x32 px RGBA) shown to an `Images` with `budget`.
+    fn four_images(budget: usize) -> Vec<u32> {
+        let shared = Shared::new(SIZE);
+        let mut f = filter(shared.clone());
+        for _ in 0..4 {
+            f.raw.extend_from_slice(format!("\x1b]1337;File=inline=1:{}\x07", png()).as_bytes());
+        }
+        f.scan(false);
+        let mut images = Images::with_budget(budget);
+        images.take(&shared);
+        images.entries.keys().copied().collect()
+    }
+
+    #[test]
+    fn the_oldest_images_go_when_over_budget() {
+        assert_eq!(four_images(5000), vec![3, 4]);
+        // One bigger than the whole budget is still shown.
+        assert_eq!(four_images(10), vec![4]);
+        assert_eq!(four_images(1 << 20), vec![1, 2, 3, 4]);
     }
 
     #[test]
