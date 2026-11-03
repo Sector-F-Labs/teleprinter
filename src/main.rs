@@ -8,6 +8,7 @@ mod control;
 mod drop;
 mod emoji;
 mod fonts;
+mod images;
 mod launch;
 mod palette;
 mod screenshot;

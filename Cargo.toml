@@ -11,7 +11,10 @@ alacritty_terminal = "0.26.0"
 dirs = "7.0.0"
 eframe = "0.35"
 egui = "0.35"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+base64 = "0.22"
+flate2 = "1"
+polling = "3"
 libc = "0.2.190"
 raw-window-handle = "0.6"
 patina-ui = { git = "https://github.com/Sector-F-Labs/patina", branch = "develop" }

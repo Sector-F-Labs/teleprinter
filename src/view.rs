@@ -8,12 +8,13 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use egui::{Color32, Event, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use ttf_parser::GlyphId;
 
 use crate::boxdraw;
 use crate::emoji;
+use crate::images;
 use crate::fonts;
 use crate::palette::{self, Palette};
 use crate::session::Session;
@@ -446,6 +447,9 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
     let mut runs: Vec<Run> = Vec::new();
     let mut emojis: Vec<(GlyphId, Rect)> = Vec::new();
     let mut drawn: Vec<(Rect, char, Color32)> = Vec::new();
+    // Slices of inline images: id, row and column within it, and the cell.
+    let mut slices: Vec<(u32, u32, u32, Rect)> = Vec::new();
+    let mut image_run: Option<(u32, Point, usize)> = None;
     let mut last: Option<Point> = None;
     // Cells before this index are the tail of an emoji sequence already placed.
     let mut emoji_until = 0;
@@ -489,6 +493,17 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
         if c.flags.contains(Flags::STRIKEOUT) {
             painter.hline(cell_rect.x_range(), cell_rect.center().y, Stroke::new(1.0, fg));
         }
+        if let (Some(row), Color::Spec(rgb)) = (images::row_of(c.c), c.fg) {
+            let id = images::id_of([rgb.r, rgb.g, rgb.b]);
+            let start = match image_run {
+                Some((rid, p, start)) if rid == id && p.line == point.line && p.column.0 + 1 == point.column.0 => start,
+                _ => point.column.0,
+            };
+            image_run = Some((id, point, start));
+            slices.push((id, row, (point.column.0 - start) as u32, cell_rect));
+            last = None;
+            continue;
+        }
         if (c.c == ' ' && c.zerowidth().is_none()) || i < emoji_until {
             last = None;
             continue;
@@ -526,6 +541,14 @@ fn paint(ui: &egui::Ui, session: &Session, palette: &Palette, font_size: f32, or
         last = if ascii { Some(point) } else { None };
     }
 
+    for (id, row, col, rect) in slices {
+        let Some((texture, cols, rows)) = session.images.borrow_mut().texture(ui.ctx(), id) else { continue };
+        let (w, h) = (cols as f32, rows as f32);
+        let uv = Rect::from_min_max(pos2(col as f32 / w, row as f32 / h), pos2((col + 1) as f32 / w, (row + 1) as f32 / h));
+        if col < cols && row < rows {
+            painter.image(texture.id(), rect, uv, Color32::WHITE);
+        }
+    }
     for run in runs {
         painter.text(run.start, egui::Align2::LEFT_TOP, run.text, fonts::font(font_size, run.bold, run.italic), run.color);
     }

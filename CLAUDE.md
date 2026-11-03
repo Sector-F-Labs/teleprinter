@@ -12,6 +12,7 @@ one). Read the relevant ones before changing fonts, colours or key handling.
 ```bash
 make test          # unit tests (key mapping, palette, cell hit-testing)
 make check         # tests + clippy -D warnings
+make bench         # event-loop throughput on cat of big files (release); run on master to compare
 make run           # run it (your login shell)
 make screenshot    # docs/screenshot-*.png, running scripts/demo.sh in a throwaway config dir
 make icons         # assets/teleprinter-icon-128.png from packaging/linux/teleprinter.svg (via resvg)
@@ -42,6 +43,10 @@ and quits, `TELEPRINTER_SPLITS=right,down` splits at start, `TELEPRINTER_TABS=3`
   draw colour glyphs; `view::emoji_at` joins the cells of a ZWJ sequence, skin tone or flag (ADR-0013).
 - `src/boxdraw.rs`: box drawing, block elements and Powerline triangles drawn from rectangles inside
   the cell, since the font's are taller than it (ADR-0015).
+- `src/images.rs`: inline images (iTerm2 `imgcat`, kitty graphics: yazi, chafa). The pty is wrapped so
+  its output is filtered; an image leaves placeholder cells (row in the character, id in the
+  foreground) that `view.rs` paints as texture slices; kitty queries are answered on the pty
+  (ADR-0017).
 - `src/drop.rs`: files dropped on the window, typed into the pane under them as shell-quoted
   paths (so Claude Code attaches images); a Wayland data device of our own on winit's connection,
   since winit 0.30 has no Wayland drops (ADR-0014).
