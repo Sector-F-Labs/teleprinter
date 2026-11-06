@@ -2465,15 +2465,19 @@ dependencies = [
 
 [[package]]
 name = "patina-ui"
-version = "0.1.13"
-source = "git+https://github.com/Sector-F-Labs/patina?branch=develop#ae6cea05d14509aa05350746a7a63432837f9bce"
+version = "0.1.14"
+source = "git+https://github.com/Sector-F-Labs/patina?branch=develop#811830cb88f2135f2021b0b06644f91ca362bd0e"
 dependencies = [
  "dirs",
  "egui",
  "libc",
+ "raw-window-handle",
  "serde",
  "serde_ignored",
  "toml",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols-plasma",
  "zbus",
 ]
 

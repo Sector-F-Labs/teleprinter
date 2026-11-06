@@ -1013,8 +1013,11 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if self.custom_frame {
+            patina::frame::shadow::request(frame);
+        }
         // Every frame: Default's colours follow the desktop's light/dark setting.
         let style = self.skin().frame_style(ui.visuals());
         let (palette, problems) = Palette::new(self.skin(), ui.visuals());
