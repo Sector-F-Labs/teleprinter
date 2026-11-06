@@ -975,16 +975,19 @@ impl App {
     }
 
     /// Where the tiles go in `desktop`, and the spacing between them. With
-    /// no gap, neighbours overlap by a border's width and the outer panes
-    /// reach a border past the desktop, so every edge is one line: shared
-    /// between two panes, or with the window's edge or the title bar's.
+    /// no gap, neighbours overlap by a border's width, so every edge is one
+    /// line: shared between two panes, or with the window's edge or the
+    /// title and status bars'. The outer panes reach a border past the
+    /// desktop above and below, to share those bars' lines; at the sides they
+    /// stop a border short, as the window's own outline is drawn over the
+    /// desktop's edge and would cover their border.
     fn tile_area(&self, ctx: &egui::Context, desktop: Rect) -> (Rect, f32) {
         let gap = self.gap();
         if gap > 0.0 {
             return (desktop, gap);
         }
         let border = ctx.global_style().visuals.window_stroke.width;
-        (desktop.expand(border), -border)
+        (desktop.expand2(egui::vec2(-border, border)), -border)
     }
 
     fn take_screenshot(&mut self, ctx: &egui::Context) {
@@ -1590,7 +1593,7 @@ mod tests {
         let gap = app.tabs[0].tree.layout(area, spacing, &|_| false, 34.0).1[0].rect.center();
         drag(&ctx, &mut app, gap, gap + vec2(-200.0, 0.0));
         let tiles = app.tabs[0].tree.layout(area, spacing, &|_| false, 34.0).0;
-        assert!((tiles[0].1.width() - 200.0).abs() < 1.0, "{:?}", tiles[0].1);
+        assert!((tiles[0].1.right() - 200.0).abs() < 1.0, "{:?}", tiles[0].1);
     }
 
     #[test]
