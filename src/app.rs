@@ -744,20 +744,20 @@ impl App {
                 let program_click = response.secondary_clicked() && view::takes_right_click(ui, session);
                 if !program_click {
                     menu::context(&response, |ui| {
-                        if ui.button("Split Right").clicked() {
+                        if ui.add(egui::Button::new("Split Right").shortcut_text("Ctrl+Shift+D")).clicked() {
                             actions.push(Action::Split(Dir::Right));
                             ui.close();
                         }
-                        if ui.button("Split Down").clicked() {
+                        if ui.add(egui::Button::new("Split Down").shortcut_text("Ctrl+Alt+Shift+D")).clicked() {
                             actions.push(Action::Split(Dir::Down));
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Copy").clicked() {
+                        if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+Shift+C")).clicked() {
                             copy = true;
                             ui.close();
                         }
-                        if ui.button("Paste").clicked() {
+                        if ui.add(egui::Button::new("Paste").shortcut_text("Ctrl+Shift+V")).clicked() {
                             paste = true;
                             ui.close();
                         }
