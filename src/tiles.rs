@@ -38,12 +38,20 @@ impl Side {
         matches!(self, Side::Right | Side::Bottom)
     }
 
-    /// The side of `rect` that `pos` is nearest, relative to its size.
-    pub fn nearest(rect: Rect, pos: Pos2) -> Side {
+    /// Where in `rect` a pane dropped at `pos` goes, by the rule of thirds: the
+    /// middle third (both ways) is `None`, to replace the pane; anywhere else
+    /// is a side to split on. The edge thirds give their side; in a corner, the
+    /// side `pos` is nearer to, relative to the size.
+    pub fn zone(rect: Rect, pos: Pos2) -> Option<Side> {
         let u = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
         let v = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+        let third = 1.0 / 3.0;
+        let middle = |t: f32| (third..=1.0 - third).contains(&t);
+        if middle(u) && middle(v) {
+            return None;
+        }
         let sides = [(u, Side::Left), (1.0 - u, Side::Right), (v, Side::Top), (1.0 - v, Side::Bottom)];
-        sides.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).map_or(Side::Right, |(_, side)| side)
+        sides.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, side)| side)
     }
 
     /// The half of `rect` a pane dropped on this side would take, for the preview.
@@ -491,11 +499,15 @@ mod tests {
     }
 
     #[test]
-    fn the_nearest_side_picks_the_drop_zone() {
-        let r = Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 100.0));
-        assert_eq!(Side::nearest(r, pos2(10.0, 50.0)), Side::Left);
-        assert_eq!(Side::nearest(r, pos2(190.0, 50.0)), Side::Right);
-        assert_eq!(Side::nearest(r, pos2(100.0, 5.0)), Side::Top);
-        assert_eq!(Side::nearest(r, pos2(100.0, 95.0)), Side::Bottom);
+    fn thirds_pick_the_drop_zone() {
+        let r = Rect::from_min_max(pos2(0.0, 0.0), pos2(300.0, 300.0));
+        assert_eq!(Side::zone(r, pos2(50.0, 150.0)), Some(Side::Left));
+        assert_eq!(Side::zone(r, pos2(250.0, 150.0)), Some(Side::Right));
+        assert_eq!(Side::zone(r, pos2(150.0, 50.0)), Some(Side::Top));
+        assert_eq!(Side::zone(r, pos2(150.0, 250.0)), Some(Side::Bottom));
+        assert_eq!(Side::zone(r, pos2(150.0, 150.0)), None, "the middle replaces");
+        assert_eq!(Side::zone(r, pos2(110.0, 190.0)), None);
+        assert_eq!(Side::zone(r, pos2(20.0, 90.0)), Some(Side::Left), "a corner: the nearer side");
+        assert_eq!(Side::zone(r, pos2(90.0, 20.0)), Some(Side::Top));
     }
 }

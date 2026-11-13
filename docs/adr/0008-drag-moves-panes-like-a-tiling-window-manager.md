@@ -28,9 +28,10 @@ The user also asked for a way to open a terminal in the bare background that fol
   bottom): it leaves its place, and joins the target's row or column if that runs the same way,
   where the children then share the space evenly; otherwise the target becomes a split of the two.
   While dragging, the half of the target it would take is highlighted ("Move here").
-- **Holding still over a pane for 0.6 s turns the drop into a swap**: the whole target is
-  highlighted ("Swap") and the two trade places, keeping the shape. Moving to another pane starts
-  the wait again.
+- **A pane is divided by the rule of thirds** (changed from a 0.6 s hold, which was hard to
+  predict): the target's edge thirds move the dragged pane to that side; in a corner, the nearer
+  side wins. The middle third, both ways, swaps: the whole target is highlighted ("Swap") and the
+  two trade places, keeping the shape.
 - **Dividers sit between neighbours in a row or column** and move only those two.
 - **Right-clicking the background** (between and below the tiles) offers New Terminal: the new
   pane goes below the pane above the click in that column, in that pane's directory, so it fills

@@ -37,8 +37,6 @@ const MAX_PANE_TITLE: f32 = 64.0;
 /// gap is narrower.
 const GRAB: f32 = 8.0;
 
-/// Seconds a dragged pane must stay over another before dropping swaps them.
-const SWAP_AFTER: f64 = 0.6;
 
 /// What the menus ask for, handled after they're drawn.
 enum Action {
@@ -105,8 +103,6 @@ pub struct App {
     renaming: Option<(usize, String)>,
     /// The pane whose title bar is being dragged onto another, to swap them.
     dragging: Option<PaneId>,
-    /// The pane the dragged one is over, and since when (egui time), for swapping.
-    hovering: Option<(PaneId, f64)>,
     /// How tall a collapsed pane is: its title bar, measured from the panes shown.
     title_height: f32,
     /// Where each pane of the shown tab was last laid out, for placing a new one in empty space.
@@ -154,7 +150,6 @@ impl App {
             next_id: 1,
             renaming: None,
             dragging: None,
-            hovering: None,
             tiles: Vec::new(),
             menu_at: None,
             title_height: 34.0,
@@ -264,7 +259,6 @@ impl App {
     fn show_tab(&mut self, tab: usize) {
         self.tab = tab.min(self.tabs.len() - 1);
         self.dragging = None;
-        self.hovering = None;
         self.requests.focus = true;
     }
 
@@ -845,26 +839,14 @@ impl App {
     }
 
     /// While a pane is dragged: show where it would go, and put it there on
-    /// release. Over another pane it joins that pane's row or column on the
-    /// nearest side, as in a tiling window manager; held still over one for
-    /// `SWAP_AFTER`, it swaps places with it instead (ADR-0008).
+    /// release. Each pane is divided by the rule of thirds: over its middle it
+    /// is replaced (the two swap); over an edge third it joins that pane's row
+    /// or column on that side, as in a tiling window manager (ADR-0008).
     fn drag_to_move(&mut self, ctx: &egui::Context, tiles: &[(PaneId, Rect)]) {
         let Some(from) = self.dragging else { return };
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-        let (pos, released, now) = ctx.input(|i| (i.pointer.interact_pos(), !i.pointer.primary_down(), i.time));
+        let (pos, released) = ctx.input(|i| (i.pointer.interact_pos(), !i.pointer.primary_down()));
         let target = pos.and_then(|p| tiles.iter().find(|(id, rect)| *id != from && rect.contains(p)));
-        // How long the pointer has been over this target.
-        self.hovering = match (target, self.hovering) {
-            (Some((id, _)), Some((was, since))) if *id == was => Some((was, since)),
-            (Some((id, _)), _) => Some((*id, now)),
-            (None, _) => None,
-        };
-        let swap = self.hovering.is_some_and(|(_, since)| now - since >= SWAP_AFTER);
-        if let Some((_, since)) = self.hovering
-            && !swap
-        {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(SWAP_AFTER - (now - since)));
-        }
 
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("drop-preview")));
         let style = ctx.global_style();
@@ -872,9 +854,12 @@ impl App {
         if let Some((_, rect)) = tiles.iter().find(|(id, _)| *id == from) {
             painter.rect_stroke(*rect, 4.0, egui::Stroke::new(1.5, accent), egui::StrokeKind::Inside);
         }
-        let drop = target.zip(pos).map(|((id, rect), p)| (*id, *rect, Side::nearest(*rect, p)));
+        let drop = target.zip(pos).map(|((id, rect), p)| (*id, *rect, Side::zone(*rect, p)));
         if let Some((_, rect, side)) = drop {
-            let (area, label) = if swap { (rect, "Swap") } else { (side.half(rect), "Move here") };
+            let (area, label) = match side {
+                None => (rect, "Swap"),
+                Some(side) => (side.half(rect), "Move here"),
+            };
             painter.rect_filled(area, 4.0, accent.gamma_multiply(0.35));
             painter.rect_stroke(area, 4.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Inside);
             painter.text(
@@ -887,14 +872,13 @@ impl App {
         }
         if released {
             match drop {
-                Some((to, _, _)) if swap => self.shown_mut().tree.swap(from, to),
-                Some((to, _, side)) => {
+                Some((to, _, None)) => self.shown_mut().tree.swap(from, to),
+                Some((to, _, Some(side))) => {
                     self.shown_mut().tree.move_pane(from, to, side);
                 }
                 None => {}
             }
             self.dragging = None;
-            self.hovering = None;
             self.activate(from);
         }
     }
@@ -1340,7 +1324,6 @@ mod tests {
             next_id: 3,
             renaming: None,
             dragging: None,
-            hovering: None,
             tiles: Vec::new(),
             menu_at: None,
             title_height: 34.0,
@@ -1537,19 +1520,11 @@ mod tests {
 
     /// Drags from `from` to `to` in small steps, as a mouse would.
     fn drag(ctx: &egui::Context, app: &mut App, from: Pos2, to: Pos2) {
-        drag_and_hold(ctx, app, from, to, 0);
-    }
-
-    /// Drags, then holds still at `to` for `hold` frames (50 ms each) before letting go.
-    fn drag_and_hold(ctx: &egui::Context, app: &mut App, from: Pos2, to: Pos2, hold: usize) {
         frame(ctx, app, vec![Event::PointerMoved(from)]);
         frame(ctx, app, vec![button(from, true)]);
         for step in 1..=10 {
             let p = from + (to - from) * (step as f32 / 10.0);
             frame(ctx, app, vec![Event::PointerMoved(p)]);
-        }
-        for _ in 0..hold {
-            frame(ctx, app, vec![]);
         }
         frame(ctx, app, vec![button(to, false)]);
         frame(ctx, app, vec![]);
@@ -1568,11 +1543,12 @@ mod tests {
     }
 
     #[test]
-    fn holding_still_over_a_pane_swaps_instead() {
+    fn dropping_on_a_panes_middle_third_swaps_instead() {
         let ctx = egui::Context::default();
         let mut app = two_panes();
         frame(&ctx, &mut app, vec![]);
-        drag_and_hold(&ctx, &mut app, pos2(100.0, 15.0), pos2(600.0, 480.0), 15);
+        let (_, rect) = *app.tiles.iter().find(|(id, _)| *id == 2).unwrap();
+        drag(&ctx, &mut app, pos2(100.0, 15.0), rect.center());
         assert_eq!(app.tabs[0].tree.panes(), [2, 1]);
         let Node::Split { dir, .. } = &app.tabs[0].tree else { panic!() };
         assert_eq!(*dir, Dir::Right, "same shape, places traded");
