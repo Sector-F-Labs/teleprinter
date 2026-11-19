@@ -1,5 +1,10 @@
 # Teleprinter
 
+> **Teleprinter has moved.** It now lives in the
+> [patina-desktop](https://github.com/Sector-F-Labs/patina-desktop) repository, in
+> [`teleprinter/`](https://github.com/Sector-F-Labs/patina-desktop/tree/develop/teleprinter), with its
+> history. This repository is archived; issues and changes go there.
+
 ![Teleprinter's icon](docs/icon.png)
 
 A terminal emulator in the [Patina](https://github.com/Sector-F-Labs/patina) family: Patina's
