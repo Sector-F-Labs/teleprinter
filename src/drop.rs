@@ -20,6 +20,7 @@ pub struct Drops {
 }
 
 impl Drops {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         Self {
             #[cfg(target_os = "linux")]

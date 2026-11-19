@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use alacritty_terminal::event::WindowSize;
 use egui::{Id, Rect};
 use patina::frame::{self, FrameStyle, TitleBar};
-use patina::menu;
+use patina::menu::{self, Entry, Menus, Role};
 use patina::skin::{self, Skin};
 use patina::tabs::{self, TabAction, TabStrip};
 
@@ -39,6 +39,7 @@ const GRAB: f32 = 8.0;
 
 
 /// What the menus ask for, handled after they're drawn.
+#[derive(Clone)]
 enum Action {
     Quit,
     SetSkin(String),
@@ -450,120 +451,79 @@ impl App {
         }
     }
 
-    /// Left side of the title bar: word menus (Patina's ADR-0006).
-    fn menus(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        ui.menu_button("File", |ui| {
-            if ui.add(egui::Button::new("New Window").shortcut_text("Ctrl+Shift+N")).clicked() {
-                actions.push(Action::NewWindow);
-                ui.close();
-            }
-            ui.separator();
-            if ui.add(egui::Button::new("Split Right").shortcut_text("Ctrl+Shift+D")).clicked() {
-                actions.push(Action::Split(Dir::Right));
-                ui.close();
-            }
-            if ui.add(egui::Button::new("Split Down").shortcut_text("Ctrl+Alt+Shift+D")).clicked() {
-                actions.push(Action::Split(Dir::Down));
-                ui.close();
-            }
-            if ui.button("Close Pane").clicked() {
-                actions.push(Action::Close(self.active()));
-                ui.close();
-            }
-            ui.separator();
-            if ui.add(egui::Button::new("New Tab").shortcut_text("Ctrl+Shift+T")).clicked() {
-                actions.push(Action::NewTab);
-                ui.close();
-            }
-            if ui.add(egui::Button::new("Close Tab").shortcut_text("Ctrl+Shift+W")).clicked() {
-                actions.push(Action::CloseTab(self.tab));
-                ui.close();
-            }
-            ui.separator();
-            if ui.button("Quit").clicked() {
-                actions.push(Action::Quit);
-                ui.close();
-            }
-        });
-        ui.menu_button("Edit", |ui| {
-            if ui.add(egui::Button::new("Copy").shortcut_text("Ctrl+Shift+C")).clicked() {
-                actions.push(Action::Copy);
-                ui.close();
-            }
-            if ui.add(egui::Button::new("Paste").shortcut_text("Ctrl+Shift+V")).clicked() {
-                actions.push(Action::Paste);
-                ui.close();
-            }
-        });
-        ui.menu_button("View", |ui| {
-            let size = self.config.font_size;
-            if ui.add_enabled(size < MAX_FONT, egui::Button::new("Larger Text")).clicked() {
-                actions.push(Action::FontSize(size + 1.0));
-            }
-            if ui.add_enabled(size > MIN_FONT, egui::Button::new("Smaller Text")).clicked() {
-                actions.push(Action::FontSize(size - 1.0));
-            }
-            if ui.button("Normal Size").clicked() {
-                actions.push(Action::FontSize(Config::default().font_size));
-            }
-            ui.separator();
-            let mut gaps = self.gap() > 0.0;
-            if ui.checkbox(&mut gaps, "Gaps Between Panes").changed() {
-                actions.push(Action::Gap(if gaps { GAP_ON } else { 0.0 }));
-            }
-            let mut system = !self.custom_frame;
-            if ui.checkbox(&mut system, "System Title Bar").changed() {
-                actions.push(Action::SystemTitleBar(system));
-            }
-        });
-        // Patina's skin menu (its ADR-0017): only controls; what they did goes to the status bar.
-        ui.menu_button("Skins", |ui| {
-            // Size the menu to its widest entry instead of wrapping entries to its first width.
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            let current = self.skin();
-            for skin in &self.skins {
-                let label = match &skin.author {
-                    Some(author) if skin.path.is_some() => format!("{} — {author}", skin.name),
-                    _ => skin.name.clone(),
-                };
-                let resp = ui.radio(skin.name == current.name, label);
-                let resp = match &skin.path {
-                    Some(path) => resp.on_hover_text(path.display().to_string()),
-                    None => resp,
-                };
-                if resp.clicked() {
-                    actions.push(Action::SetSkin(skin.name.clone()));
-                }
-            }
-            ui.separator();
-            ui.add_enabled_ui(current.follows_desktop(), |ui| {
-                for (value, label) in [("system", "Follow desktop"), ("light", "Light"), ("dark", "Dark")] {
-                    // An unset or unknown setting follows the desktop.
-                    let on = match value {
-                        "system" => !matches!(self.config.light_dark.as_str(), "light" | "dark"),
-                        _ => self.config.light_dark == value,
-                    };
-                    if ui.radio(on, label).clicked() {
-                        actions.push(Action::SetLightDark(value.into()));
-                    }
-                }
-            });
-            ui.separator();
-            if ui.button("Reload skins").clicked() {
-                actions.push(Action::ReloadSkins);
-            }
-            if ui
-                .button("Copy built-in skins to folder")
-                .on_hover_text("Puts editable copies in the skins folder; never overwrites existing files")
-                .clicked()
-            {
-                actions.push(Action::CopySkins);
-            }
-            let folder = skin::app_dir(APP).map(|d| d.display().to_string()).unwrap_or_default();
-            if ui.button("Open skins folder").on_hover_text(folder).clicked() {
-                actions.push(Action::OpenSkinsFolder);
-            }
-        });
+    /// The menus as data (Patina's ADR-0036): egui menus in the title bar, the screen's menu bar
+    /// on macOS. The model owns the shortcuts, so the app doesn't handle them separately; Copy
+    /// and Paste on macOS stay with the view (⌘C/⌘V arrive as egui's Copy/Paste events, and a
+    /// menu accelerator on top would paste twice).
+    fn menus(&self) -> Menus<Action> {
+        use egui::{Key, KeyboardShortcut as Sc, Modifiers as M};
+        // Ctrl+Shift on Linux, where plain Ctrl belongs to the shell; ⌘⇧ on macOS.
+        let cs = M::COMMAND | M::SHIFT;
+        let size = self.config.font_size;
+        let mut skins: Vec<Entry<Action>> = Vec::new();
+        let current = self.skin();
+        for skin in &self.skins {
+            let label = match &skin.author {
+                Some(author) if skin.path.is_some() => format!("{} — {author}", skin.name),
+                _ => skin.name.clone(),
+            };
+            skins.push(Entry::item(label, Action::SetSkin(skin.name.clone())).radio(skin.name == current.name));
+        }
+        skins.push(Entry::separator());
+        let follows = current.follows_desktop();
+        for (value, label) in [("system", "Follow desktop"), ("light", "Light"), ("dark", "Dark")] {
+            // An unset or unknown setting follows the desktop.
+            let on = match value {
+                "system" => !matches!(self.config.light_dark.as_str(), "light" | "dark"),
+                _ => self.config.light_dark == value,
+            };
+            skins.push(Entry::item(label, Action::SetLightDark(value.into())).radio(on).enabled(follows));
+        }
+        skins.push(Entry::separator());
+        skins.push(Entry::item("Reload skins", Action::ReloadSkins));
+        skins.push(Entry::item("Copy built-in skins to folder", Action::CopySkins));
+        skins.push(Entry::item("Open skins folder", Action::OpenSkinsFolder));
+
+        let (copy, paste) = if cfg!(target_os = "macos") {
+            (Entry::item("Copy", Action::Copy), Entry::item("Paste", Action::Paste))
+        } else {
+            (
+                Entry::item("Copy", Action::Copy).shortcut(Sc::new(cs, Key::C)),
+                Entry::item("Paste", Action::Paste).shortcut(Sc::new(cs, Key::V)),
+            )
+        };
+        Menus::new()
+            .app_name("Teleprinter")
+            .menu(
+                "File",
+                [
+                    Entry::item("New Window", Action::NewWindow).shortcut(Sc::new(cs, Key::N)),
+                    Entry::separator(),
+                    Entry::item("Split Right", Action::Split(Dir::Right)).shortcut(Sc::new(cs, Key::D)),
+                    Entry::item("Split Down", Action::Split(Dir::Down)).shortcut(Sc::new(cs | M::ALT, Key::D)),
+                    Entry::item("Close Pane", Action::Close(self.active())),
+                    Entry::separator(),
+                    Entry::item("New Tab", Action::NewTab).shortcut(Sc::new(cs, Key::T)),
+                    Entry::item("Close Tab", Action::CloseTab(self.tab)).shortcut(Sc::new(cs, Key::W)),
+                    Entry::separator(),
+                    Entry::item("Quit", Action::Quit).role(Role::Quit),
+                ],
+            )
+            .menu("Edit", [copy, paste])
+            .menu(
+                "View",
+                [
+                    Entry::item("Larger Text", Action::FontSize(size + 1.0)).enabled(size < MAX_FONT),
+                    Entry::item("Smaller Text", Action::FontSize(size - 1.0)).enabled(size > MIN_FONT),
+                    Entry::item("Normal Size", Action::FontSize(Config::default().font_size)),
+                    Entry::separator(),
+                    Entry::item("Gaps Between Panes", Action::Gap(if self.gap() > 0.0 { 0.0 } else { GAP_ON }))
+                        .check(self.gap() > 0.0),
+                    Entry::item("System Title Bar", Action::SystemTitleBar(self.custom_frame)).check(!self.custom_frame),
+                ],
+            )
+            // Patina's skin menu (its ADR-0017): only controls; what they did goes to the status bar.
+            .menu("Skins", skins)
     }
 
     /// Rescans the built-in and user skins; the config keeps the one in use by name.
@@ -1038,10 +998,6 @@ impl eframe::App for App {
         // Taken before the panes see them: these keys don't reach the shell.
         actions.extend(tabs::terminal_keys(&ctx, self.tabs.len(), self.tab).map(Action::from));
         actions.extend(tab_number(&ctx, self.tabs.len()).map(Action::ShowTab));
-        actions.extend(split_key(&ctx).map(Action::Split));
-        if new_window_key(&ctx) {
-            actions.push(Action::NewWindow);
-        }
         let header = frame::header_frame(ui.style(), &style, radius);
         egui::Panel::top("header").frame(header).show(ui, |ui| {
             // The bar's full height, for the tabs to fill.
@@ -1050,7 +1006,7 @@ impl eframe::App for App {
             TitleBar::new("", &style).custom(self.custom_frame).menu_bar(true).span(span).show(
                 ui,
                 |ui| {
-                    self.menus(ui, &mut actions);
+                    actions.extend(self.menus().show(ui));
                     self.tab_strip(ui, span, &style, &mut actions);
                 },
                 // A terminal's output is the shell's; nothing goes on the right.
@@ -1188,43 +1144,6 @@ impl From<TabAction> for Action {
 /// Alt+1 to Alt+9 show that tab, as in GNOME Terminal. Taken, with the digit
 /// egui sends after it as text, only when there is such a tab, so readline's
 /// Alt+digit still works past the last one.
-/// Ctrl+Shift+D splits the active pane to the right, Ctrl+Alt+Shift+D
-/// below, as Cmd+D and Cmd+Shift+D do in iTerm; on the Patina desktop
-/// that's Super+D and Super+Shift+D, which the compositor sends a terminal
-/// as those. Taken before the shell, which would read them as Ctrl+D, the
-/// end of its input.
-fn split_key(ctx: &egui::Context) -> Option<Dir> {
-    let right = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
-    let down = right | egui::Modifiers::ALT;
-    ctx.input_mut(|i| {
-        let mut split = None;
-        for (keys, dir) in [(right, Dir::Right), (down, Dir::Down)] {
-            let before = i.events.len();
-            i.events.retain(|e| {
-                !matches!(e, egui::Event::Key { key: egui::Key::D, pressed: true, modifiers: m, .. } if m.matches_exact(keys))
-            });
-            if i.events.len() != before {
-                split = Some(dir);
-            }
-        }
-        split
-    })
-}
-
-/// Ctrl+Shift+N opens another window, Super+N on the Patina desktop, as
-/// Cmd+N does on a Mac. Taken before the shell, which would read it as
-/// Ctrl+N.
-fn new_window_key(ctx: &egui::Context) -> bool {
-    let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
-    ctx.input_mut(|i| {
-        let before = i.events.len();
-        i.events.retain(|e| {
-            !matches!(e, egui::Event::Key { key: egui::Key::N, pressed: true, modifiers: m, .. } if m.matches_exact(keys))
-        });
-        i.events.len() != before
-    })
-}
-
 fn tab_number(ctx: &egui::Context, count: usize) -> Option<usize> {
     const DIGITS: [egui::Key; 9] = {
         use egui::Key::*;
@@ -1368,48 +1287,34 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_shift_d_splits_right_and_with_alt_down_never_reaching_the_shell() {
+    fn menu_shortcuts_split_and_open_windows_and_never_reach_the_shell() {
         let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-        let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
-        for (events, want) in [
-            (vec![key(egui::Key::D, keys)], Some(Dir::Right)),
-            (vec![key(egui::Key::D, keys | egui::Modifiers::ALT)], Some(Dir::Down)),
-            (vec![key(egui::Key::E, keys)], None),
-            // Plain Ctrl+D is the shell's end of input.
-            (vec![key(egui::Key::D, egui::Modifiers::CTRL)], None),
+        let keys = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+        let alt = keys | egui::Modifiers::ALT;
+        for (event, want, taken) in [
+            (key(egui::Key::D, keys), "right", true),
+            (key(egui::Key::D, alt), "down", true),
+            (key(egui::Key::N, keys), "window", true),
+            // Plain Ctrl+D is the shell's end of input, Ctrl+N readline's next line.
+            (key(egui::Key::D, egui::Modifiers::COMMAND), "", false),
+            (key(egui::Key::N, egui::Modifiers::COMMAND), "", false),
         ] {
             let ctx = egui::Context::default();
-            let input = egui::RawInput { events, ..Default::default() };
-            let mut got = None;
+            let app = panes_split(Dir::Right);
+            let input = egui::RawInput { events: vec![event], ..Default::default() };
+            let mut got = "";
             let mut left = 0;
             let _ = ctx.run_ui(input, |ui| {
-                got = split_key(ui.ctx());
+                got = match app.menus().show_in_window(ui) {
+                    Some(Action::Split(Dir::Right)) => "right",
+                    Some(Action::Split(Dir::Down)) => "down",
+                    Some(Action::NewWindow) => "window",
+                    _ => "",
+                };
                 left = ui.input(|i| i.events.len());
             });
             assert_eq!(got, want);
-            assert_eq!(left, usize::from(want.is_none()), "only a split key is taken");
-        }
-    }
-
-    #[test]
-    fn ctrl_shift_n_opens_a_window_and_ctrl_n_stays_the_shells() {
-        let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-        let keys = egui::Modifiers::CTRL | egui::Modifiers::SHIFT;
-        for (event, want) in [
-            (key(egui::Key::N, keys), true),
-            // Readline's next line.
-            (key(egui::Key::N, egui::Modifiers::CTRL), false),
-            (key(egui::Key::N, keys | egui::Modifiers::ALT), false),
-        ] {
-            let ctx = egui::Context::default();
-            let input = egui::RawInput { events: vec![event], ..Default::default() };
-            let (mut got, mut left) = (false, 0);
-            let _ = ctx.run_ui(input, |ui| {
-                got = new_window_key(ui.ctx());
-                left = ui.input(|i| i.events.len());
-            });
-            assert_eq!(got, want);
-            assert_eq!(left, usize::from(!want), "only the window key is taken");
+            assert_eq!(left, usize::from(!taken), "only a menu shortcut is taken");
         }
     }
 

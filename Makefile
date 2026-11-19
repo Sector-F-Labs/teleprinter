@@ -12,7 +12,7 @@ SCRATCH_ENV := XDG_CONFIG_HOME=$(CURDIR)/target/scratch-config XDG_DATA_HOME=$(C
 
 .DEFAULT_GOAL := help
 
-.PHONY: help run dev build test bench check screenshot icons install uninstall clean icon
+.PHONY: help run dev build test bench check screenshot icons install uninstall clean icon dmg
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -73,6 +73,10 @@ uninstall: ## Remove what make install put in place
 	rm -f $(ICONDIR)/scalable/apps/$(APP_ID).svg $(ICONDIR)/128x128/apps/$(APP_ID).png
 	-update-desktop-database -q $(APPSDIR)
 	-@test ! -f $(ICONDIR)/icon-theme.cache || gtk-update-icon-cache -q -t -f $(ICONDIR)
+
+dmg: ## Build a universal Teleprinter.app in a .dmg into target/dmg/ (macOS only)
+	@test "$$(uname -s)" = Darwin || { echo "make dmg runs on macOS"; exit 1; }
+	packaging/macos/build-dmg.sh
 
 clean: ## Remove build output
 	cargo clean

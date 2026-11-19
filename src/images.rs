@@ -271,12 +271,21 @@ impl Wake {
     fn new() -> io::Result<Self> {
         use std::os::fd::FromRawFd;
         let mut fds = [0i32; 2];
-        // SAFETY: pipe2 fills `fds` with two new descriptors, which the Files then own.
+        // SAFETY: pipe fills `fds` with two new descriptors, which the Files then own. macOS has
+        // no pipe2, so the flags are set after, on both ends.
         unsafe {
-            if libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) != 0 {
+            if libc::pipe(fds.as_mut_ptr()) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            Ok(Self { read: File::from_raw_fd(fds[0]), write: File::from_raw_fd(fds[1]), signaled: false })
+            let (read, write) = (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1]));
+            for fd in fds {
+                if libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) != 0
+                    || libc::fcntl(fd, libc::F_SETFL, libc::fcntl(fd, libc::F_GETFL) | libc::O_NONBLOCK) != 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(Self { read, write, signaled: false })
         }
     }
 
@@ -712,7 +721,10 @@ fn read_image_file(path: &std::path::Path, temporary: bool) -> Result<Vec<u8>, S
         return Err("EFBIG:file too big".into());
     }
     let named_for_it = real.to_string_lossy().contains("tty-graphics-protocol");
-    if temporary && named_for_it && real.starts_with(std::env::temp_dir()) {
+    // `real` is canonical, so the temp directory must be too (macOS's is under the /var symlink).
+    let temp = std::env::temp_dir();
+    let temp = temp.canonicalize().unwrap_or(temp);
+    if temporary && named_for_it && real.starts_with(temp) {
         let _ = std::fs::remove_file(&real);
     }
     Ok(bytes)
